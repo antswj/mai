@@ -21,7 +21,7 @@ let testInteropLibs = ProcessInfo.processInfo.environment["MAI_TEST_INTEROP_LIBS
 let package = Package(
     name: "Mai",
     platforms: [
-        .macOS(.v14) // required floor for the SwiftUI App lifecycle used by MaiApp
+        .macOS(.v15) // SCStreamConfiguration.captureMicrophone / SCStreamOutputType.microphone are macOS 15+
     ],
     products: [
         .library(name: "MaiCore", targets: ["MaiCore"]),

@@ -8,8 +8,8 @@ import MaiCore
 // and Soniox wiring are added in the capture chunk; this file owns the assembly,
 // the speaker registry, and pause (which closes the sockets, not just mutes).
 public final class RealEars: Ears, @unchecked Sendable {
-    private let config: Config
-    private let secrets: Secrets
+    let config: Config
+    let secrets: Secrets
     private let _stream: AsyncStream<TranscriptEvent>
     private let cont: AsyncStream<TranscriptEvent>.Continuation
 
@@ -40,6 +40,12 @@ public final class RealEars: Ears, @unchecked Sendable {
     public func start() async throws {
         try await startCapture()
     }
+
+    // Accessors so the capture wiring (in another file) can reach the private state.
+    func setClients(mic: SonioxClient, system: SonioxClient) { micClient = mic; systemClient = system }
+    func setAudioCapture(_ capture: AudioCapture) { audioCapture = capture }
+    func sendMic(_ data: Data) { micClient?.sendAudio(data) }
+    func sendSystem(_ data: Data) { systemClient?.sendAudio(data) }
 
     public func stop() {
         // Pause is a privacy valve: tear down capture AND close the sockets.
