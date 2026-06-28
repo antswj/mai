@@ -30,8 +30,7 @@ public final class ScreenWatcher: NSObject, SCStreamOutput, SCStreamDelegate, @u
     }
 
     public func start() async throws {
-        let content = try await SCShareableContent.current
-        guard let display = content.displays.first else { throw CaptureError.noDisplay }
+        let display = try await CaptureContent.firstDisplay()
         let filter = SCContentFilter(display: display, excludingWindows: [])
 
         let cfg = SCStreamConfiguration()

@@ -4,16 +4,35 @@ import AVFoundation
 import CoreMedia
 import MaiCore
 
-public enum CaptureError: Error, CustomStringConvertible {
+public enum CaptureError: Error, CustomStringConvertible, LocalizedError {
     case noDisplay
     case noShareableContent
     case missingKey(String)
     public var description: String {
         switch self {
-        case .noDisplay: return "no display available to capture"
+        case .noDisplay:
+            return "ScreenCaptureKit returned no displays. This can happen briefly right after granting permission, so relaunching Mai.app usually fixes it."
         case .noShareableContent: return "could not read shareable content (grant Screen Recording)"
         case .missingKey(let k): return "missing \(k)"
         }
+    }
+    public var errorDescription: String? { description }
+}
+
+// Reliable shareable-content fetch. Uses excludingDesktopWindows (the battle-tested
+// call) rather than SCShareableContent.current, which can return empty displays on
+// current macOS, and retries because display enumeration can transiently be empty in
+// the moment after Screen Recording is granted.
+enum CaptureContent {
+    static func firstDisplay(retries: Int = 6, delayMs: UInt64 = 300) async throws -> SCDisplay {
+        for _ in 0...retries {
+            if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+               let display = content.displays.first {
+                return display
+            }
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        }
+        throw CaptureError.noDisplay
     }
 }
 
@@ -44,8 +63,7 @@ public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         // Microphone and Screen Recording grants are requested and verified up front
         // by CapturePermissions before this runs, so the SCStream only starts when
         // both are granted.
-        let content = try await SCShareableContent.current
-        guard let display = content.displays.first else { throw CaptureError.noDisplay }
+        let display = try await CaptureContent.firstDisplay()
         // Audio capture requires a valid display filter even though we ignore video.
         let filter = SCContentFilter(display: display, excludingWindows: [])
 
