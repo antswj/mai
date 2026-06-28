@@ -24,14 +24,25 @@ extension RealEars {
                                onUpdate: { [weak self] up in self?.handle(up, source: .user) })
         let system = SonioxClient(configJSON: systemConfig,
                                   onUpdate: { [weak self] up in self?.handle(up, source: .remote) })
-        mic.connect()
-        system.connect()
         setClients(mic: mic, system: system)
+
+        // With VAD gating on, each gate connects its socket lazily on speech onset and
+        // tears it down on sustained silence (Soniox bills the full open duration). If
+        // VAD is off or the model fails to load, fall back to keeping both streams open.
+        if cfg.vadEnabled, let micVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate),
+           let systemVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate) {
+            setGates(mic: VadGatedSource(client: mic, vad: micVad, config: cfg),
+                     system: VadGatedSource(client: system, vad: systemVad, config: cfg))
+        } else {
+            setGates(mic: nil, system: nil)
+            mic.connect()
+            system.connect()
+        }
 
         let capture = AudioCapture(sampleRate: cfg.sttSampleRate) { [weak self] source, data in
             switch source {
-            case .user: self?.sendMic(data)
-            case .remote: self?.sendSystem(data)
+            case .user: self?.feedMic(data)
+            case .remote: self?.feedSystem(data)
             }
         }
         try await capture.start()

@@ -33,6 +33,9 @@ let package = Package(
     dependencies: [
         // Current, actively maintained SQLite wrapper (confirmed v7.11.1, 2026-06).
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
+        // ONNX Runtime for on-device Silero VAD v5 (confirmed v1.24.2, 2026-06).
+        // Fully local inference; the binary is fetched once at resolve time.
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.24.2"),
     ],
     targets: [
         .target(
@@ -50,7 +53,15 @@ let package = Package(
         // Ears/Eyes contracts. Kept separate so MaiCore stays portable.
         .target(
             name: "MaiCapture",
-            dependencies: ["MaiCore"]
+            dependencies: [
+                "MaiCore",
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+            ],
+            exclude: ["Resources/SILERO_LICENSE"],
+            resources: [
+                // Silero VAD v5 model (MIT). On-device, no network at runtime.
+                .copy("Resources/silero_vad.onnx"),
+            ]
         ),
         .executableTarget(
             name: "MaiApp",

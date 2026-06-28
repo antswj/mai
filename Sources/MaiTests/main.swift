@@ -590,6 +590,71 @@ do {
     check(rig.sink.all.allSatisfy { $0.pending.isEmpty || $0.id != card?.id }, "no card left stuck mid-enrichment")
 }
 
+// ============================ Step 3: VAD gating ============================
+
+section("VAD gate: onset/offset hysteresis + hangover, no flap")
+do {
+    let cfg = VadGateConfig(onset: 0.5, offset: 0.35, hangoverSeconds: 4, frameSeconds: 0.032)
+    var gate = VadGate(config: cfg)
+    check(gate.feed(probability: 0.2) == nil && !gate.isOpen, "silence keeps the gate closed")
+    check(gate.feed(probability: 0.9) == .open && gate.isOpen, "speech onset opens the gate")
+    var closedEarly = false
+    for _ in 0..<Int(2.0 / 0.032) { if gate.feed(probability: 0.1) == .close { closedEarly = true } }
+    check(!closedEarly && gate.isOpen, "a 2s pause (< hangover) does not close (no flap)")
+    check(gate.feed(probability: 0.8) == nil && gate.isOpen, "speech resumes, still open")
+    var closeCount = 0
+    for _ in 0..<Int(5.0 / 0.032) { if gate.feed(probability: 0.0) == .close { closeCount += 1 } }
+    check(closeCount == 1 && !gate.isOpen, "sustained silence closes exactly once after the hangover")
+    check(gate.feed(probability: 0.99) == .open, "next onset reopens the gate")
+}
+
+section("VAD frame accumulator: fixed 512-sample frames, remainder retained")
+do {
+    var acc = FrameAccumulator(frameSize: 512)
+    check(acc.push(Array(repeating: 0, count: 300)).isEmpty, "fewer than 512 samples yields no frame")
+    let frames = acc.push(Array(repeating: 0, count: 800))   // total 1100 -> two frames, 76 left
+    check(frames.count == 2 && frames.allSatisfy { $0.count == 512 }, "emits whole 512-sample frames")
+    let more = acc.push(Array(repeating: 0, count: 436))     // 76 + 436 = 512 -> one frame
+    check(more.count == 1, "retained remainder completes the next frame")
+}
+
+section("VAD preroll ring: byte-capped, drains recent audio in order")
+do {
+    var ring = PrerollRing(maxBytes: 1000)
+    ring.append(Data(repeating: 1, count: 400))
+    ring.append(Data(repeating: 2, count: 400))
+    ring.append(Data(repeating: 3, count: 400))              // 1200 > 1000 -> evict oldest
+    check(ring.byteCount == 800, "oldest chunk evicted to stay under the cap")
+    let out = ring.drain()
+    check(out.count == 800 && out.first == 2 && out.last == 3, "drains the most recent audio in order")
+    check(ring.byteCount == 0, "drain clears the ring")
+}
+
+section("Silero VAD: bundled ONNX model loads and runs on-device")
+do {
+    if let vad = SileroVAD.bundled(sampleRate: 16000) {
+        check(vad.frameSize == 512, "16 kHz frame size is 512 samples")
+        // Silence: a few frames should run without throwing and read as low probability.
+        var ok = true
+        var silenceProb: Float = 1
+        for _ in 0..<5 {
+            do { silenceProb = try vad.probability(frame: [Float](repeating: 0, count: 512)) }
+            catch { ok = false }
+        }
+        check(ok, "ONNX inference runs without error (tensor I/O correct)")
+        check(silenceProb >= 0 && silenceProb <= 1, "probability is in [0,1]")
+        check(silenceProb < 0.5, "silence reads as low speech probability (\(silenceProb))")
+        // A loud voiced-band sweep should run and stay in range (not asserting it reads
+        // as speech: synthetic tones are not speech, but the path must be exercised).
+        var tone = [Float](repeating: 0, count: 512)
+        for i in 0..<512 { tone[i] = 0.6 * sinf(Float(i) * 0.18) }
+        let toneProb = (try? vad.probability(frame: tone)) ?? -1
+        check(toneProb >= 0 && toneProb <= 1, "non-silent frame also yields a valid probability")
+    } else {
+        check(false, "bundled Silero model should load (run via swift run so resources resolve)")
+    }
+}
+
 // Summary
 print("\n========================================")
 if failures.isEmpty {

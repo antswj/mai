@@ -26,6 +26,10 @@ public final class RealEars: Ears, @unchecked Sendable {
     private var micClient: SonioxClient?
     private var systemClient: SonioxClient?
     private var audioCapture: AudioCapture?
+    // VAD gating (Part D): present when enabled and the model loads. Each gate owns
+    // its source's Soniox stream lifecycle; audio is routed through it.
+    private var micGate: VadGatedSource?
+    private var systemGate: VadGatedSource?
 
     public init(config: Config, secrets: Secrets) {
         self.config = config
@@ -43,14 +47,18 @@ public final class RealEars: Ears, @unchecked Sendable {
 
     // Accessors so the capture wiring (in another file) can reach the private state.
     func setClients(mic: SonioxClient, system: SonioxClient) { micClient = mic; systemClient = system }
+    func setGates(mic: VadGatedSource?, system: VadGatedSource?) { micGate = mic; systemGate = system }
     func setAudioCapture(_ capture: AudioCapture) { audioCapture = capture }
-    func sendMic(_ data: Data) { micClient?.sendAudio(data) }
-    func sendSystem(_ data: Data) { systemClient?.sendAudio(data) }
+    // Route audio through the VAD gate when present, else straight to the socket.
+    func feedMic(_ data: Data) { if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data) } }
+    func feedSystem(_ data: Data) { if let g = systemGate { g.feed(data) } else { systemClient?.sendAudio(data) } }
 
     public func stop() {
         // Pause is a privacy valve: tear down capture AND close the sockets.
         audioCapture?.stop()
         audioCapture = nil
+        micGate?.stop(); systemGate?.stop()
+        micGate = nil; systemGate = nil
         micClient?.close()
         systemClient?.close()
         micClient = nil

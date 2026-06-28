@@ -177,13 +177,55 @@ func smokeScreen() async {
     } catch { print("  Gemini ERROR: \(error)") }
 }
 
+func smokeVAD() {
+    line(); print("Silero VAD smoke (on-device ONNX, no network)")
+    guard let vad = SileroVAD.bundled(sampleRate: config.sttSampleRate) else {
+        print("  could not load the bundled model"); return
+    }
+    let silence = (try? vad.probability(frame: [Float](repeating: 0, count: vad.frameSize))) ?? -1
+    var tone = [Float](repeating: 0, count: vad.frameSize)
+    for i in 0..<vad.frameSize { tone[i] = 0.6 * sinf(Float(i) * 0.18) }
+    let toneProb = (try? vad.probability(frame: tone)) ?? -1
+    print(String(format: "  silence p=%.3f, tone p=%.3f", silence, toneProb))
+    let ok = silence >= 0 && silence <= 1 && silence < 0.5 && toneProb >= 0 && toneProb <= 1
+    print("  RESULT: \(ok ? "ok (model runs on-device, silence reads low)" : "uncertain")")
+}
+
+func smokeGrounded() async {
+    line(); print("Grounded-search smoke (Gemini \(config.screenModel), Google Search tool)")
+    guard let key = secrets.get("GEMINI_API_KEY") else { print("  no GEMINI_API_KEY, skipped"); return }
+    do {
+        let r = try await GeminiGroundedSearch(apiKey: key, model: config.screenModel)
+            .answer(query: "who is the current secretary-general of the united nations", interface: config.interfaceLanguage)
+        print("  answer: \(r.answer.trimmingCharacters(in: .whitespacesAndNewlines))")
+        print("  sources: \(r.sources.count) (\(r.sources.first?.url ?? "none"))")
+        print("  RESULT: \(r.answer.isEmpty ? "uncertain (empty answer)" : "ok (grounded answer with sources)")")
+    } catch { print("  Gemini grounded ERROR: \(error)") }
+}
+
+func smokeEntity() async {
+    line(); print("Entity smoke (Wikipedia summary + cross-language resolution)")
+    let entity = MaiFactory.makeEntityLookup(config: config, secrets: secrets)
+    do {
+        if let r = try await entity.lookup(term: "Malaysia", spoken: .en, interface: config.interfaceLanguage) {
+            print("  \(r.title): \(r.summary.prefix(90))...")
+            print("  image: \(r.imageURL ?? "none")  source: \(r.sourceURL)")
+            print("  RESULT: ok")
+        } else { print("  RESULT: uncertain (no result)") }
+    } catch { print("  Wikipedia ERROR: \(error)") }
+}
+
 switch which {
 case "llm": await smokeLLM()
 case "places": await smokePlaces()
 case "vision": await smokeVision()
 case "soniox": await smokeSoniox()
 case "screen": await smokeScreen()
+case "vad": smokeVAD()
+case "grounded": await smokeGrounded()
+case "entity": await smokeEntity()
 default:
     await smokeLLM(); await smokePlaces(); await smokeVision(); await smokeSoniox(); await smokeScreen()
+    smokeVAD(); await smokeEntity(); await smokeGrounded()
 }
 line(); print("Smoke tests done.")
