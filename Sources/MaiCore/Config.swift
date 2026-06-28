@@ -28,6 +28,19 @@ public struct Config: Sendable {
     public var screenAlwaysOn: Bool
     public var testLat: Double
     public var testLng: Double
+    // Step 2: real capture settings.
+    public var sttModel: String
+    public var sttSampleRate: Int
+    public var sttLanguageHints: [String]
+    public var sttLanguageId: Bool
+    public var sttDiarization: Bool
+    public var sttTranslation: Bool
+    public var screenSettleSeconds: Double
+    public var screenFrameIntervalSeconds: Double
+    public var captureSource: String
+    public var startPaused: Bool
+    public var showLiveTranscript: Bool
+    public var ruby: Bool
 
     public init(
         llmProvider: String = "anthropic",
@@ -51,7 +64,19 @@ public struct Config: Sendable {
         screenChangeThreshold: Double = 0.15,
         screenAlwaysOn: Bool = true,
         testLat: Double = 35.7016,
-        testLng: Double = 139.9853
+        testLng: Double = 139.9853,
+        sttModel: String = "stt-rt-v5",
+        sttSampleRate: Int = 16000,
+        sttLanguageHints: [String] = ["en", "ja", "zh"],
+        sttLanguageId: Bool = true,
+        sttDiarization: Bool = true,
+        sttTranslation: Bool = false,
+        screenSettleSeconds: Double = 1.0,
+        screenFrameIntervalSeconds: Double = 1.0,
+        captureSource: String = "main_display",
+        startPaused: Bool = false,
+        showLiveTranscript: Bool = true,
+        ruby: Bool = true
     ) {
         self.llmProvider = llmProvider; self.placesProvider = placesProvider
         self.classifierModel = classifierModel; self.drafterModel = drafterModel; self.screenModel = screenModel
@@ -63,6 +88,11 @@ public struct Config: Sendable {
         self.meetingMode = meetingMode; self.furigana = furigana; self.pinyin = pinyin
         self.screenChangeThreshold = screenChangeThreshold; self.screenAlwaysOn = screenAlwaysOn
         self.testLat = testLat; self.testLng = testLng
+        self.sttModel = sttModel; self.sttSampleRate = sttSampleRate; self.sttLanguageHints = sttLanguageHints
+        self.sttLanguageId = sttLanguageId; self.sttDiarization = sttDiarization; self.sttTranslation = sttTranslation
+        self.screenSettleSeconds = screenSettleSeconds; self.screenFrameIntervalSeconds = screenFrameIntervalSeconds
+        self.captureSource = captureSource; self.startPaused = startPaused
+        self.showLiveTranscript = showLiveTranscript; self.ruby = ruby
     }
 
     /// Load from a config.toml. Missing file or missing keys fall back to defaults.
@@ -97,6 +127,20 @@ public struct Config: Sendable {
         if let v = bln("screen", "always_on") { c.screenAlwaysOn = v }
         if let v = dbl("location", "test_lat") { c.testLat = v }
         if let v = dbl("location", "test_lng") { c.testLng = v }
+        // Step 2 sections.
+        if let v = str("stt", "model") { c.sttModel = v }
+        if let v = dbl("stt", "sample_rate") { c.sttSampleRate = Int(v) }
+        if let v = toml["stt"]?["language_hints"]?.stringArray { c.sttLanguageHints = v }
+        if let v = bln("stt", "enable_language_identification") { c.sttLanguageId = v }
+        if let v = bln("stt", "enable_speaker_diarization") { c.sttDiarization = v }
+        if let v = bln("stt", "translation") { c.sttTranslation = v }
+        if let v = str("vision", "model") { c.screenModel = v }  // Gemini vision model for screen reads
+        if let v = dbl("screen", "settle_seconds") { c.screenSettleSeconds = v }
+        if let v = dbl("screen", "frame_interval_seconds") { c.screenFrameIntervalSeconds = v }
+        if let v = str("screen", "capture_source") { c.captureSource = v }
+        if let v = bln("capture", "start_paused") { c.startPaused = v }
+        if let v = bln("transcript", "show_live") { c.showLiveTranscript = v }
+        if let v = bln("transcript", "ruby") { c.ruby = v }
         return c
     }
 }

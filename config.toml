@@ -13,6 +13,18 @@ screen     = "gemini-2.5-flash"   # Gemini vision model for screen reads (smoke 
 # claude-opus-4-8 is available for heavy reasoning.
 # If providers.llm = "groq", use instead: classifier "openai/gpt-oss-20b", drafter "openai/gpt-oss-120b".
 
+[stt]
+provider = "soniox"
+model = "stt-rt-v5"                  # current Soniox real-time model (verified 2026-06)
+sample_rate = 16000
+language_hints = ["en", "ja", "zh"]
+enable_language_identification = true
+enable_speaker_diarization = true   # on the remote (system audio) side
+translation = false                 # enable if it helps produce info-language text
+
+[vision]
+model = "gemini-2.5-flash"          # Gemini Flash-family vision model for screen reads (verified 2026-06)
+
 [latency]
 target_seconds = 3
 hard_cap_seconds = 5
@@ -37,8 +49,18 @@ furigana = true
 pinyin = true
 
 [screen]
-change_threshold = 0.15           # used by the real eyes later; present now for tuning
+change_threshold = 0.15           # dHash Hamming fraction; only changes above this fire a read
 always_on = true                  # Mai watches continuously
+settle_seconds = 1.0              # wait for the screen to settle before reading
+frame_interval_seconds = 1.0     # low-rate watching (about 1 fps)
+capture_source = "main_display"  # or a picker-selected window/screen
+
+[capture]
+start_paused = false             # always-on by default; user can pause anytime
+
+[transcript]
+show_live = true                 # the always-on lyrics-style live transcript view
+ruby = true                      # furigana over kanji, pinyin over hanzi, as true ruby
 
 [location]
 test_lat = 35.7016                # public Funabashi Station area, NOT a home address
