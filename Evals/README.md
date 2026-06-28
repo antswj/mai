@@ -14,6 +14,11 @@ What they check:
   accurate, natural prepared lines with correct furigana (Japanese) and pinyin
   (Chinese) plus a faithful translation, and grounded fun facts and recipes with no
   fabricated links.
+- Lookup router (`promptfooconfig.router.yaml` + `router_dataset.yaml`): picks the
+  right route (entity / fresh / technical), keeps Japanese and Chinese entity names
+  in their native script, and flags freshness for time-sensitive asks. Trivial
+  answers are decided locally (in code), so they are covered by `swift run MaiTests`,
+  not by this prompt eval.
 
 ## Run them
 
@@ -26,6 +31,7 @@ export ANTHROPIC_API_KEY="$(grep '^ANTHROPIC_API_KEY=' .env | cut -d= -f2-)"
 cd Evals
 promptfoo eval -c promptfooconfig.yaml
 promptfoo eval -c promptfooconfig.drafter.yaml
+promptfoo eval -c promptfooconfig.router.yaml
 ```
 
 View the last results in a browser:
@@ -55,3 +61,18 @@ text-based and cannot take live audio or a microphone:
   plus diarization plus the on-screen-name correlation, with the graceful fallback,
   are unit-tested in `swift run MaiTests` (SpeakerNaming), and the local furigana and
   pinyin generation is tested there too.
+
+## Step 3: card intelligence and gating
+
+The card brain is verified across the same three layers:
+
+- Routing: the router prompt eval above (per route, trilingual entity extraction).
+  The end-to-end routing plus async enrichment, the never-fabricate path, and the
+  response toggle are driven deterministically with stubs in `swift run MaiTests`.
+- Real lookups: `swift run MaiSmoke entity` exercises the live Wikipedia summary and
+  cross-language resolution (e.g. 寿司 and 马来西亚 resolve to the English article),
+  and `swift run MaiSmoke grounded` exercises the live Gemini grounded web search
+  with real sources.
+- Voice-activity gating: the gate, frame accumulator, and pre-roll ring are pure
+  logic unit-tested in `swift run MaiTests`, which also loads the bundled Silero
+  model and runs real on-device ONNX inference. `swift run MaiSmoke vad` runs it live.

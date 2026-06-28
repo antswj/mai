@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's lookup-router prompt: it picks the right
+# route (entity / fresh / technical), keeps Japanese and Chinese entity names in
+# their native script, and flags freshness when an answer is time-sensitive. Trivial
+# answers are decided locally (see the MaiTests harness), not by this prompt.
+# Run: `promptfoo eval -c promptfooconfig.router.yaml`
+description: Mai lookup router (trilingual route selection + entity extraction)
+
+prompts:
+  - file://router_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-haiku-4-5
+    config:
+      max_tokens: 300
+      temperature: 0
+
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+  assert:
+    - type: contains-json
+
+tests: file://router_dataset.yaml

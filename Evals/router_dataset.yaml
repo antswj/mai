@@ -1,0 +1,80 @@
+# Labeled cases for the lookup router prompt. Trivial answers are decided locally
+# (not by this prompt), so the router chooses among entity / fresh / technical and
+# extracts a native-script entity name. Trilingual on purpose.
+
+- vars:
+    topic: "who is Ada Lovelace"
+    conversation: "Mia: we were just reading about early computing pioneers"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "entity", "entity" is "Ada Lovelace" (English/Latin
+        script preserved), and "needs_image" is true.
+
+- vars:
+    topic: "北京"
+    conversation: "Sato: 来月、北京に出張するんだ"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "entity" and "entity" is kept in its native script
+        (Chinese characters such as 北京), NOT translated to "Beijing".
+
+- vars:
+    topic: "お寿司"
+    conversation: "Lee: お寿司ってそもそもどういう食べ物なんだろう"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "entity" and "entity" stays in Japanese script
+        (e.g. 寿司 or お寿司), not romanized.
+
+- vars:
+    topic: "马来西亚"
+    conversation: "Wang: 我下个月要去马来西亚"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "entity" and "entity" stays in Chinese script
+        (e.g. 马来西亚), not "Malaysia".
+
+- vars:
+    topic: "who won the match last night"
+    conversation: "Jon: did you catch the score"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "fresh" and "needs_search" is true (the answer is
+        time-sensitive and needs a live web search).
+
+- vars:
+    topic: "今日の東京の天気"
+    conversation: "Sato: 今日って傘いるかな"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "fresh" and "needs_search" is true (current weather).
+
+- vars:
+    topic: "how does a hash map work"
+    conversation: "Mia: I keep hearing about hash maps but never got how they work"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "technical" (a how/why explanation), not entity or fresh.
+
+- vars:
+    topic: "什么是递归"
+    conversation: "Wang: 这个递归到底是什么意思"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "technical" (explaining a concept, here recursion).
