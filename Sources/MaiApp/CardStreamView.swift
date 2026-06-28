@@ -32,7 +32,10 @@ struct CardStreamView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(visible) { item in
-                            CardRow(item: item)
+                            CardRow(item: item,
+                                    floorLanguage: model.config.floorLanguage,
+                                    meetingMode: model.config.meetingMode,
+                                    ruby: model.config.ruby)
                         }
                     }
                 }
@@ -45,7 +48,15 @@ struct CardStreamView: View {
 
 struct CardRow: View {
     let item: DisplayItem
+    var floorLanguage: Language = .ja
+    var meetingMode: Bool = true
+    var ruby: Bool = true
     var card: Card { item.card }
+
+    // Prepared-line cards render the floor line as ruby; everything else is plain.
+    private var isPreparedLine: Bool {
+        card.trigger == .reference && meetingMode && ruby && floorLanguage != .en
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -54,10 +65,26 @@ struct CardRow: View {
                 Text(card.title).font(.system(.body, weight: .semibold))
                 Spacer()
             }
-            Text(card.body)
-                .font(.system(.body))
-                .textSelection(.enabled)
-                .foregroundStyle(item.suppressed ? .secondary : .primary)
+            if isPreparedLine {
+                let parts = card.body.components(separatedBy: "\n")
+                let floor = parts.first ?? card.body
+                let translation = parts.count > 1 ? parts[1] : ""
+                let note = parts.count > 2 ? parts[2...].joined(separator: "\n") : ""
+                VStack(alignment: .leading, spacing: 4) {
+                    RubyLineView(units: Readings.units(floor, language: floorLanguage), baseFont: 18)
+                    if !translation.isEmpty {
+                        Text(translation).font(.callout).foregroundStyle(.secondary)
+                    }
+                    if !note.isEmpty {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Text(card.body)
+                    .font(.system(.body))
+                    .textSelection(.enabled)
+                    .foregroundStyle(item.suppressed ? .secondary : .primary)
+            }
             if let action = card.action, let urlStr = action.params["url"], let url = URL(string: urlStr) {
                 Button(action.label) { NSWorkspace.shared.open(url) }
                     .buttonStyle(.borderedProminent).controlSize(.small)

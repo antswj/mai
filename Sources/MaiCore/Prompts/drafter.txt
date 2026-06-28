@@ -14,15 +14,13 @@ Inputs you receive: the floor language (ja or zh), the conversation context, and
 who is asking. Produce a natural, polite, concise reply in the FLOOR language.
 Return:
 {
-  "line": "<the reply in the floor language, with reading aids on hard words only>",
+  "line": "<the reply in the floor language, plain text>",
   "translation": "<a faithful translation of the line into the interface language>"
 }
-Reading aids (true ruby comes in a later step; for now use parentheses right after
-the hard word):
-- Japanese: furigana in hiragana, e.g. 漢字(かんじ), 寿司(すし). Only annotate kanji
-  that are genuinely non-trivial; do not annotate kana or easy words.
-- Chinese: pinyin with tone marks, e.g. 寿司(shòusī), 报告(bàogào). Only annotate
-  less-common characters.
+Write the line as plain, natural floor-language text with NO parenthetical readings:
+the app renders furigana over Japanese kanji and pinyin over Chinese characters as
+true ruby, generated locally. Do not add romaji, kana-in-parentheses, or pinyin-in
+-parentheses yourself.
 Keep the line short and speakable (one to three sentences). It is a suggestion, so
 keep it safe, neutral, and easy to adjust. Do not fabricate facts or commitments.
 

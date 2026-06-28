@@ -115,9 +115,10 @@ struct Cardize: Sendable {
             let line = (obj["line"] as? String) ?? ""
             let translation = (obj["translation"] as? String) ?? ""
             if line.isEmpty { return nil }
-            var body = line
-            if !translation.isEmpty { body += "\n\n\(translation)" }
-            body += "\n\nSuggested reply for \(who). Adjust as needed."
+            // Three single lines so the card view can render the floor line as ruby,
+            // the translation as a dimmer line, and the note as caption.
+            let note = "Suggested reply for \(who). Adjust as needed."
+            let body = line + "\n" + translation + "\n" + note
             let title = "Suggested reply (\(floorLanguage.rawValue.uppercased()))"
             return Card(title: title, body: body, trigger: trigger.type, tier: .critical,
                         score: trigger.confidence, timestamp: now, action: nil, latencyMs: nil)

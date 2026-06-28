@@ -75,10 +75,10 @@ public struct StubLLM: LLMProvider {
         case let k where k.contains("prepared_line"):
             let floor = valueAfter("Floor language:", in: user) ?? "English"
             if floor.contains("Japanese") {
-                return object(["line": "承知(しょうち)しました。後(あと)ほど確認(かくにん)してご連絡(れんらく)します。",
+                return object(["line": "承知しました。後ほど確認してご連絡します。",
                                "translation": "Understood. I will check and get back to you shortly."])
             } else if floor.contains("Chinese") {
-                return object(["line": "好的，我稍后确认(quèrèn)后回复(huífù)您。",
+                return object(["line": "好的，我稍后确认后回复您。",
                                "translation": "OK, I will confirm and reply to you shortly."])
             } else {
                 return object(["line": "Sure, let me confirm and get back to you shortly.",

@@ -100,7 +100,10 @@ do {
     if let c = rig.face.cards.first {
         check(c.trigger == .reference, "trigger is reference")
         check(c.tier == .critical, "tier critical")
-        check(c.body.contains("確認(かくにん)"), "furigana on hard kanji (parenthetical)")
+        check(c.body.contains("確認"), "floor line carries the kanji (plain; ruby rendered in the UI)")
+        let floor = c.body.components(separatedBy: "\n").first ?? ""
+        let units = Readings.units(floor, language: .ja)
+        check(units.contains { $0.reading?.contains("かくにん") == true }, "local furigana for 確認 is かくにん")
         check(c.body.contains("Understood"), "English translation present")
         check(c.body.contains("Sato"), "who-said-what attribution")
         check(c.body.contains("Adjust as needed"), "teleprompter framing")
@@ -114,7 +117,10 @@ do {
     await rig.engine.process(tline("你怎么看？请说一下你的想法。", "Wang"))
     check(rig.face.cards.count == 1, "one prepared-line card")
     if let c = rig.face.cards.first {
-        check(c.body.contains("确认(quèrèn)"), "pinyin on hard characters (parenthetical)")
+        check(c.body.contains("确认"), "floor line carries the hanzi (plain; ruby rendered in the UI)")
+        let floor = c.body.components(separatedBy: "\n").first ?? ""
+        let units = Readings.units(floor, language: .zh)
+        check(units.contains { $0.base == "确" && ($0.reading ?? "").hasPrefix("qu") }, "local pinyin for 确 is què")
         check(c.body.contains("Wang"), "attribution present")
     }
 }

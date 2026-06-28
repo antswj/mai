@@ -46,7 +46,10 @@ import Foundation
         let card = try #require(rig.face.cards.first)
         #expect(card.trigger == .reference)
         #expect(card.tier == .critical)
-        #expect(card.body.contains("確認(かくにん)"), "furigana on hard kanji (parenthetical)")
+        #expect(card.body.contains("確認"), "floor line carries the kanji (plain; ruby in the UI)")
+        let floor = card.body.components(separatedBy: "\n").first ?? ""
+        #expect(Readings.units(floor, language: .ja).contains { $0.reading?.contains("かくにん") == true },
+                "local furigana for 確認 is かくにん")
         #expect(card.body.contains("Understood"), "interface-language translation present")
         #expect(card.body.contains("Sato"), "who-said-what attribution")
         #expect(card.body.contains("Adjust as needed"), "teleprompter framing")
@@ -59,7 +62,10 @@ import Foundation
         #expect(rig.face.cards.count == 1)
         let card = try #require(rig.face.cards.first)
         #expect(card.trigger == .reference)
-        #expect(card.body.contains("确认(quèrèn)"), "pinyin on hard characters (parenthetical)")
+        #expect(card.body.contains("确认"), "floor line carries the hanzi (plain; ruby in the UI)")
+        let floor = card.body.components(separatedBy: "\n").first ?? ""
+        #expect(Readings.units(floor, language: .zh).contains { $0.base == "确" && ($0.reading ?? "").hasPrefix("qu") },
+                "local pinyin for 确 is què")
         #expect(card.body.contains("Wang"))
     }
 

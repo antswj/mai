@@ -16,7 +16,9 @@ import Foundation
         let t = Trigger(type: .reference, span: "respond", reason: "r", confidence: 0.85, payload: ["speaker": "Sato"])
         let card = try #require(await c.make(trigger: t, result: .preparedReply(context: "...", asker: "Sato"), now: Date()))
         #expect(card.tier == .critical)
-        #expect(card.body.contains("確認(かくにん)"))
+        #expect(card.body.contains("確認"))  // plain floor line; ruby is rendered in the UI
+        #expect(Readings.units(card.body.components(separatedBy: "\n").first ?? "", language: .ja)
+                    .contains { $0.reading?.contains("かくにん") == true })
         #expect(card.body.contains("Understood"))
         #expect(card.body.contains("Adjust as needed"))
     }
