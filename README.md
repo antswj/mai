@@ -118,7 +118,11 @@ Privacy and Security: add `Mai` under **Screen and System Audio Recording** and 
 
 This is the ad-hoc signing churn: each `./make-app.sh` rebuild changes the app's code
 hash, so the previous grant no longer matches and macOS leaves a stale "on" entry
-that does not apply to the new build. Fix it once so grants persist across rebuilds:
+that does not apply to the new build. `make-app.sh` auto-uses a stable certificate
+when one is in your keychain, preferring a real **Developer ID Application**
+certificate (best: trusted and notarizable) and otherwise a self-signed **Mai Dev**
+cert; with either, the grants persist across rebuilds. If you have neither, create
+the self-signed cert once:
 
 1. Create a self-signed code-signing certificate named **Mai Dev**: open Keychain
    Access, menu Certificate Assistant, Create a Certificate, name it `Mai Dev`,

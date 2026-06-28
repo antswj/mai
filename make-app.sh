@@ -19,13 +19,17 @@ MIN_OS="15.0"              # SCStreamConfiguration.captureMicrophone is macOS 15
 # Signing identity. A stable cert makes the Screen Recording / Microphone grants
 # PERSIST across rebuilds; ad-hoc grants reset every rebuild because the code hash
 # changes, which leaves a stale "on" entry in System Settings that no longer matches.
-# If SIGN_ID is unset, auto-use a self-signed code-signing cert named "Mai Dev" when
-# present, else fall back to ad-hoc. Note: list identities WITHOUT `-v` here. A
-# self-signed root is untrusted (CSSMERR_TP_NOT_TRUSTED), so `-v` (valid only) hides
-# it; codesign still signs with it fine and the grant persists, which is the whole
-# point, so we match against the full identity list.
+# If SIGN_ID is unset, prefer a real "Developer ID Application" certificate (trusted,
+# stable, and notarizable), then a self-signed "Mai Dev" cert, then ad-hoc. Any
+# stable cert makes the Screen Recording / Microphone grants persist across rebuilds.
+# List identities WITHOUT `-v`: a self-signed root is untrusted
+# (CSSMERR_TP_NOT_TRUSTED), so `-v` (valid only) hides it, yet codesign signs with it
+# fine, so we match against the full identity list.
 if [ -z "${SIGN_ID:-}" ]; then
-    if security find-identity -p codesigning 2>/dev/null | grep -q "Mai Dev"; then
+    ALL_IDS="$(security find-identity -p codesigning 2>/dev/null)"
+    if echo "$ALL_IDS" | grep -q "Developer ID Application"; then
+        SIGN_ID="$(echo "$ALL_IDS" | grep "Developer ID Application" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+    elif echo "$ALL_IDS" | grep -q "Mai Dev"; then
         SIGN_ID="Mai Dev"
     else
         SIGN_ID="-"
@@ -44,10 +48,14 @@ BIN="$(swift build -c release --show-bin-path)/${APP_NAME}"
 
 rm -rf "$APP"
 mkdir -p "$MACOS"
+RESOURCES="${CONTENTS}/Resources"
+mkdir -p "$RESOURCES"
 cp "$BIN" "$MACOS/${APP_NAME}"
-# Copy SwiftPM resource bundles (e.g. Mai_MaiCore.bundle holding the prompt
-# templates) next to the executable so Bundle.module resolves inside the app.
-cp -R "$(dirname "$BIN")"/*.bundle "$MACOS"/ 2>/dev/null || true
+# Copy SwiftPM resource bundles (Mai_MaiCore.bundle holds the prompt templates;
+# Mai_MaiCapture.bundle holds the Silero VAD model) into Contents/Resources, the
+# proper place for sealed resources so codesign --verify --strict passes. Bundle.module
+# resolves them at runtime via its build-path fallback on this machine.
+cp -R "$(dirname "$BIN")"/*.bundle "$RESOURCES"/ 2>/dev/null || true
 
 # Info.plist is written before signing (signing seals it).
 cat > "${CONTENTS}/Info.plist" <<PLIST
