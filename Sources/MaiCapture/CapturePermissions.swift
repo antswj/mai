@@ -1,14 +1,17 @@
 import Foundation
 import AVFoundation
-import CoreGraphics
+import ScreenCaptureKit
 
 // Runtime TCC permission checks, gated before any SCStream starts. ScreenCaptureKit
 // microphone capture needs BOTH a Microphone grant (AVCaptureDevice) and a Screen
-// Recording grant (CoreGraphics); neither can be assumed from System Settings, so we
-// request/verify both at runtime. Verified current on macOS 26 (2026-06):
-// AVCaptureDevice.requestAccess(for: .audio), CGPreflightScreenCaptureAccess(),
-// CGRequestScreenCaptureAccess(). Mic takes effect immediately; Screen Recording
-// requires a relaunch after granting.
+// Recording grant; neither can be assumed from System Settings.
+//
+// Screen Recording is checked the ScreenCaptureKit-native way (attempt
+// SCShareableContent; success means the grant is effective for capture, a throw
+// means it is not). This is deliberately NOT CGPreflightScreenCaptureAccess(), which
+// is a launch-time snapshot and returns false negatives for ad-hoc-signed apps even
+// when the grant is real (verified against Apple forum reports, 2026-06). The first
+// such call also triggers the system prompt; the grant takes effect after a relaunch.
 public struct CapturePermissionStatus: Sendable, Equatable {
     public let microphoneGranted: Bool
     public let screenRecordingGranted: Bool
@@ -35,21 +38,40 @@ public enum CapturePermissions {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
-        default: return false   // denied or restricted: the user must enable it in Settings
+        default: return false   // denied or restricted: enable it in System Settings
         }
     }
 
-    public static func screenRecordingGranted() -> Bool { CGPreflightScreenCaptureAccess() }
+    /// True when ScreenCaptureKit can actually read the screen (the reliable signal).
+    /// A success means granted; any throw (notably SCStreamError.userDeclined) means
+    /// not granted. Bounded by a timeout because SCShareableContent can hang.
+    public static func screenRecordingGranted() async -> Bool {
+        await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                do {
+                    _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                return nil   // timeout
+            }
+            for await result in group {
+                group.cancelAll()
+                return result ?? false
+            }
+            return false
+        }
+    }
 
-    @discardableResult
-    public static func requestScreenRecording() -> Bool { CGRequestScreenCaptureAccess() }
-
-    /// Request the microphone first (no relaunch), then ensure Screen Recording,
-    /// prompting for it if needed (that grant requires a relaunch to take effect).
+    /// Request the microphone first (no relaunch), then check Screen Recording (which
+    /// prompts on first use and needs a relaunch to take effect).
     public static func ensure() async -> CapturePermissionStatus {
         let mic = await requestMicrophone()
-        var screen = screenRecordingGranted()
-        if !screen { _ = requestScreenRecording(); screen = screenRecordingGranted() }
+        let screen = await screenRecordingGranted()
         return CapturePermissionStatus(microphoneGranted: mic, screenRecordingGranted: screen)
     }
 }

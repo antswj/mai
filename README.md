@@ -87,9 +87,28 @@ Recording). If a prompt does not appear, grant them manually in System Settings,
 Privacy and Security: add `Mai` under **Screen and System Audio Recording** and under
 **Microphone**, then relaunch.
 
-(Ad-hoc grants reset on each rebuild. To make them persist, create a self-signed code
-signing certificate named `Mai Dev` in Keychain Access, then build with
-`SIGN_ID="Mai Dev" ./make-app.sh`.)
+### If Mai keeps asking for permission (even though System Settings shows it granted)
+
+This is the ad-hoc signing churn: each `./make-app.sh` rebuild changes the app's code
+hash, so the previous grant no longer matches and macOS leaves a stale "on" entry
+that does not apply to the new build. Fix it once so grants persist across rebuilds:
+
+1. Create a self-signed code-signing certificate named **Mai Dev**: open Keychain
+   Access, menu Certificate Assistant, Create a Certificate, name it `Mai Dev`,
+   Identity Type **Self Signed Root**, Certificate Type **Code Signing**, Create.
+   `make-app.sh` then uses it automatically (no env var needed) and the grants stick.
+2. Clear the stale grants (paste into Terminal, or type `! <command>` in this CLI):
+
+   ```
+   tccutil reset ScreenCapture com.mai.app
+   tccutil reset Microphone com.mai.app
+   ```
+
+3. `./make-app.sh`, `open Mai.app`, grant once, then relaunch.
+
+(Mai checks Screen Recording the ScreenCaptureKit-native way rather than via the
+unreliable `CGPreflightScreenCaptureAccess`, so once the grant actually applies to the
+running build, the app stops asking.)
 
 The window has a capture bar at the top (a colored indicator, a **Pause** button, and
 a **Simulated** debug toggle), the live transcript in the middle, and the card stream
