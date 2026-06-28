@@ -1,0 +1,66 @@
+# Labeled, sanitized classifier cases. All content is fictional. The grader judges
+# the JSON the classifier returns against each rubric. The classifier must be
+# conservative: most boring lines return an empty triggers array.
+
+- description: boring English small talk stays quiet
+  vars:
+    conversation: "Mia: hey, how was your weekend?"
+  assert:
+    - type: llm-rubric
+      value: "The output is a JSON object with a 'triggers' array, and that array is EMPTY. Ordinary small talk must not produce any trigger."
+
+- description: boring Japanese greeting stays quiet
+  vars:
+    conversation: "Sato: おはようございます。今日もよろしくお願いします。"
+  assert:
+    - type: llm-rubric
+      value: "The output is a JSON object whose 'triggers' array is EMPTY. A greeting is not a trigger."
+
+- description: mixed JP/EN sushi craving fires a place trigger
+  vars:
+    conversation: "Lee: ngl ちょっとお寿司を食べたい気分, after this meeting."
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains exactly one item with type 'place' (a food/restaurant search). Its payload query should refer to sushi or food. No other trigger types."
+
+- description: mixed ZH/EN hunger fires a place trigger
+  vars:
+    conversation: "Chen: 你不觉得 kinda hungry, sushi?"
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'place' trigger for finding food/sushi nearby. Code-switching between Chinese and English must not prevent detection."
+
+- description: Japanese screen-pointing fires screenReference
+  vars:
+    conversation: "Sato: 画面を見てください。次のスライドです。"
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'screenReference' trigger (the speaker points at the shared screen)."
+
+- description: Chinese screen-pointing fires screenReference
+  vars:
+    conversation: "Wang: 请看屏幕，这是第二张幻灯片。"
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'screenReference' trigger."
+
+- description: Japanese ask-to-respond fires reference
+  vars:
+    conversation: "Sato: それでは、ご意見をお願いできますか？"
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'reference' trigger (the user is being asked to respond / give their view)."
+
+- description: recipe curiosity fires a question or intent
+  vars:
+    conversation: "Mia: i wanna make pudding but i wonder how."
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'question' or 'intent' trigger about making pudding (a recipe would help). The payload query refers to pudding."
+
+- description: travel mention fires a question or intent (fun fact)
+  vars:
+    conversation: "Jon: oh by the way, i'm going to Malaysia next month!"
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'question' or 'intent' trigger about Malaysia (a delightful fun fact would fit). It must NOT be a 'place' trigger."

@@ -1,0 +1,13 @@
+# Sanitized sample meeting (Japanese + English). All names and content are
+# fictional. [SCREEN] lines stand in for screen reads (always-seeing).
+Sato: おはようございます。今日のアジェンダを確認しましょう。
+Lee: Sounds good. Let's start with the quarterly review.
+[SCREEN] Slide 1: Q3 revenue overview
+Sato: 数字は概ね順調ですね。
+Lee: ngl ちょっとお寿司を食べたい気分、after this meeting.
+Sato: わかります。あとで行きましょう。
+[SCREEN] Slide 2: Q4 roadmap and hiring plan
+Sato: 画面を見てください。次の四半期の計画です。
+Lee: なるほど、いい計画ですね。
+Sato: それでは、ご意見をお願いできますか？
+Lee: ありがとうございます。

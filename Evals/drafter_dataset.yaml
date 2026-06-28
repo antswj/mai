@@ -1,0 +1,54 @@
+# Labeled, sanitized drafter cases. All content is fictional. The grader judges the
+# JSON the drafter returns against each rubric.
+
+- description: Japanese prepared line has furigana and a faithful translation
+  vars:
+    task: |
+      CARD KIND: prepared_line
+      Floor language: Japanese
+      Interface language: English
+      Reading aids: furigana ON (annotate hard kanji)
+      Who is asking: Sato
+      Conversation context:
+      Sato: それでは、ご意見をお願いできますか？
+      Produce the JSON now.
+  assert:
+    - type: llm-rubric
+      value: "JSON with 'line' and 'translation'. 'line' is a natural, polite Japanese reply with furigana in parentheses immediately after hard kanji, e.g. 確認(かくにん). 'translation' is a faithful English translation of that line. The reply is a reasonable thing to say when asked for one's opinion."
+
+- description: Chinese prepared line has pinyin and a faithful translation
+  vars:
+    task: |
+      CARD KIND: prepared_line
+      Floor language: Chinese
+      Interface language: English
+      Reading aids: pinyin ON (annotate hard characters)
+      Who is asking: Wang
+      Conversation context:
+      Wang: 你怎么看？请说一下你的想法。
+      Produce the JSON now.
+  assert:
+    - type: llm-rubric
+      value: "JSON with 'line' and 'translation'. 'line' is a natural, polite Chinese reply with pinyin (tone marks) in parentheses after less-common characters, e.g. 确认(quèrèn). 'translation' faithfully renders the line in English."
+
+- description: fun fact is accurate and carries no fabricated link
+  vars:
+    task: |
+      CARD KIND: fun_fact
+      Interface language: English
+      Topic: Malaysia
+      Produce the JSON now.
+  assert:
+    - type: llm-rubric
+      value: "JSON with 'title' and 'body'. The body is one or two sentences with a plausible, accurate-sounding fun fact about Malaysia, in English. It must NOT contain any URL or a fabricated precise citation."
+
+- description: recipe lists ingredients and a rough time, no link
+  vars:
+    task: |
+      CARD KIND: recipe
+      Interface language: English
+      Dish: pudding
+      Produce the JSON now.
+  assert:
+    - type: llm-rubric
+      value: "JSON with 'title' and 'body'. The body lists the handful of main ingredients for pudding and an approximate total time. It must NOT contain a URL or fabricated link."

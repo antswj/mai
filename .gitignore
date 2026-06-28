@@ -1,0 +1,31 @@
+# Secrets: never commit real keys. Only .env.example is allowed.
+.env
+.env.*
+!.env.example
+
+# Captured data (always-on listening + screen reads stay local only)
+/data/
+data/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.jsonl
+
+# Local private-term blocklist for the pre-commit hook (optional, never committed)
+.private-terms
+
+# Swift / SwiftPM build artifacts
+.build/
+.swiftpm/
+Package.resolved
+DerivedData/
+
+# macOS / editor noise
+*.xcuserstate
+.DS_Store
+*.swp
+
+# promptfoo local output
+.promptfoo/
+Evals/output/

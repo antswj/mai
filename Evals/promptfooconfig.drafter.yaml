@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's drafter prompt: accurate, natural
+# prepared lines with correct furigana/pinyin and a faithful translation, plus
+# grounded fun facts and recipes with no fabricated links.
+# Run: `promptfoo eval -c promptfooconfig.drafter.yaml`
+description: Mai drafter (dual-language prepared lines, grounded info cards)
+
+prompts:
+  - file://drafter_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-sonnet-4-6
+    config:
+      max_tokens: 700
+      temperature: 0
+
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+  assert:
+    - type: contains-json
+
+tests: file://drafter_dataset.yaml

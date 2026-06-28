@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's classifier prompt. Grades the REAL
+# committed prompt against a labeled, sanitized, trilingual dataset: it fires the
+# right trigger types, stays quiet on boring lines, and code-switches across
+# English, Japanese, and Chinese. Run: `promptfoo eval -c promptfooconfig.yaml`
+description: Mai classifier (trilingual, conservative)
+
+prompts:
+  - file://classifier_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-haiku-4-5
+    config:
+      max_tokens: 512
+      temperature: 0
+
+# The LLM-as-judge grader for every llm-rubric assertion.
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+  assert:
+    # contains-json (not is-json): the engine tolerates a JSON object even if the
+    # model wraps it in prose or code fences (JSONExtract strips them).
+    - type: contains-json
+
+tests: file://dataset.yaml

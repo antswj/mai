@@ -1,0 +1,45 @@
+# Mai's tuning surface. Models and providers live here so a swap is one edit
+# plus a restart. Secrets are in .env (gitignored), never here.
+
+[providers]
+llm = "anthropic"                 # "anthropic" or "groq"
+places = "merged"                 # "merged" (Google + Hot Pepper), "google", "hotpepper", or "stub"
+
+[models]
+# Anthropic defaults (verified current 2026-06). Fast classifier, quality drafter.
+classifier = "claude-haiku-4-5"
+drafter    = "claude-sonnet-4-6"
+screen     = "gemini-2.5-flash"   # Gemini vision model for screen reads (smoke test now, eyes later)
+# claude-opus-4-8 is available for heavy reasoning.
+# If providers.llm = "groq", use instead: classifier "openai/gpt-oss-20b", drafter "openai/gpt-oss-120b".
+
+[latency]
+target_seconds = 3
+hard_cap_seconds = 5
+
+[rolling_context]
+max_turns = 12
+max_seconds = 120
+
+[surfacing]
+threshold = 0.6
+show_suppressed_log = true
+refire_cooldown_seconds = 90
+
+[triggers]
+enabled = ["place", "question", "intent", "reference", "screenReference"]
+
+[language]
+interface = "en"
+floor = "ja"                      # "zh" for Chinese meetings
+meeting_mode = true
+furigana = true
+pinyin = true
+
+[screen]
+change_threshold = 0.15           # used by the real eyes later; present now for tuning
+always_on = true                  # Mai watches continuously
+
+[location]
+test_lat = 35.7016                # public Funabashi Station area, NOT a home address
+test_lng = 139.9853

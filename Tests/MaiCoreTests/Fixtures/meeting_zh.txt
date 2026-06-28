@@ -1,0 +1,11 @@
+# Sanitized sample meeting (Chinese). All names and content are fictional.
+# Set language.floor = "zh" in config.toml to see pinyin on prepared lines.
+Wang: 大家好，我们开始今天的会议。
+Chen: 好的。先回顾第三季度的情况。
+[SCREEN] 幻灯片1：第三季度收入概览
+Wang: 数据总体不错。
+Chen: 这之后我有点饿，想吃寿司。
+Wang: 哈哈，好啊，等会儿去。
+[SCREEN] 幻灯片2：第四季度计划
+Wang: 你怎么看？请说一下你的想法。
+Chen: 谢谢。

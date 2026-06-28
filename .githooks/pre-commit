@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# Mai pre-commit guard. Blocks committing secrets or captured data into this
+# PUBLIC repo. Enable once with: git config core.hooksPath .githooks
+#
+# It checks the staged content (not the working tree), so it catches anything
+# about to enter history. If it blocks something legitimately, fix the staged
+# files; do not bypass with --no-verify unless you are certain.
+
+set -u
+
+red()   { printf "\033[31m%s\033[0m\n" "$1"; }
+yellow(){ printf "\033[33m%s\033[0m\n" "$1"; }
+
+fail=0
+block() { red "BLOCKED: $1"; fail=1; }
+
+# Names of staged files (added/copied/modified), NUL-safe.
+staged_files=$(git diff --cached --name-only --diff-filter=ACM -z | tr '\0' '\n')
+
+# 1) Forbidden paths by name.
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    .env|.env.*)
+      [ "$f" = ".env.example" ] || block "secrets file staged: $f (only .env.example may be committed)" ;;
+    data/*|*/data/*)
+      block "captured-data path staged: $f (data stays local only)" ;;
+    *.sqlite|*.sqlite-*|*.db|*.db-*|*.jsonl)
+      block "local store/capture file staged: $f" ;;
+    .private-terms)
+      block "private-terms list staged: $f (keep it local only)" ;;
+  esac
+done <<< "$staged_files"
+
+# 2) Key-shaped strings in the staged diff content.
+# Patterns: Anthropic (sk-ant-), generic OpenAI-style sk-, Groq gsk_, Google AIza,
+# long hex (>=32), and long base64-ish (>=40). .env.example placeholders are skipped.
+diff_added=$(git diff --cached --diff-filter=ACM -U0 -- . ':(exclude).env.example' | grep -E '^\+' | grep -vE '^\+\+\+')
+
+check_pat() {
+  local label="$1" pat="$2"
+  if printf '%s' "$diff_added" | grep -Eiq "$pat"; then
+    block "possible secret ($label) in staged changes"
+  fi
+}
+check_pat "anthropic key"   'sk-ant-[A-Za-z0-9_-]{20,}'
+check_pat "openai-style key" '\bsk-[A-Za-z0-9]{20,}'
+check_pat "groq key"        '\bgsk_[A-Za-z0-9]{20,}'
+check_pat "google api key"  '\bAIza[0-9A-Za-z_-]{30,}'
+check_pat "long hex secret" '\b[0-9a-f]{32,}\b'
+
+# 3) Optional local blocklist of private terms (one per line, '#' comments ok).
+if [ -f .private-terms ]; then
+  while IFS= read -r term; do
+    term="${term%%#*}"; term="$(printf '%s' "$term" | xargs 2>/dev/null)"
+    [ -z "$term" ] && continue
+    if printf '%s' "$diff_added" | grep -Fiq "$term"; then
+      block "private term present in staged changes: \"$term\""
+    fi
+  done < .private-terms
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  yellow "Commit aborted by .githooks/pre-commit. Unstage the offending content."
+  yellow "Real keys belong in .env (gitignored). Captured data stays local only."
+  exit 1
+fi
+exit 0
