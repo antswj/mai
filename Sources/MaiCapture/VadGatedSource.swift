@@ -14,15 +14,22 @@ import MaiCore
 final class VadGatedSource: @unchecked Sendable {
     private let client: SonioxClient
     private let vad: SileroVAD
+    private let onSent: @Sendable () -> Void
     private let lock = NSLock()
     private var gate: VadGate
     private var accumulator: FrameAccumulator
     private var preroll: PrerollRing
     private var streaming = false
+    // Fail-open safety: if the VAD keeps erroring, stop gating and stream everything,
+    // so a broken detector can never starve transcription (no audio = no cards).
+    private var consecutiveErrors = 0
+    private var gatingDisabled = false
+    private static let errorBudget = 20   // ~0.6s of failed inference before giving up gating
 
-    init(client: SonioxClient, vad: SileroVAD, config: Config) {
+    init(client: SonioxClient, vad: SileroVAD, config: Config, onSent: @escaping @Sendable () -> Void = {}) {
         self.client = client
         self.vad = vad
+        self.onSent = onSent
         let frameSeconds = Double(vad.frameSize) / Double(config.sttSampleRate)
         self.gate = VadGate(config: VadGateConfig(
             onset: config.vadOnset, offset: config.vadOffset,
@@ -36,17 +43,34 @@ final class VadGatedSource: @unchecked Sendable {
     // One chunk of raw PCM16 (Int16 LE, mono, at the STT sample rate).
     func feed(_ pcm16: Data) {
         lock.withLock {
+            // Fail-open: a broken VAD streams everything rather than starving STT.
+            if gatingDisabled {
+                client.sendAudio(pcm16); onSent()
+                return
+            }
             preroll.append(pcm16)
             var justOpened = false
             for frame in accumulator.push(Self.int16ToFloat(pcm16)) {
                 let probability: Double
-                do { probability = Double(try vad.probability(frame: frame)) }
-                catch { probability = gate.isOpen ? 1.0 : 0.0 }      // hold state on a transient error
+                do {
+                    probability = Double(try vad.probability(frame: frame))
+                    consecutiveErrors = 0
+                } catch {
+                    consecutiveErrors += 1
+                    if consecutiveErrors >= Self.errorBudget {
+                        gatingDisabled = true
+                        streaming = true
+                        client.connect()
+                        client.sendAudio(preroll.drain()); onSent()
+                        return                                       // stream everything from now on
+                    }
+                    probability = gate.isOpen ? 1.0 : 0.0           // hold state on a transient error
+                }
                 switch gate.feed(probability: probability) {
                 case .open:
                     streaming = true; justOpened = true
                     client.connect()
-                    client.sendAudio(preroll.drain())               // flush pre-roll + reconnect audio
+                    client.sendAudio(preroll.drain()); onSent()     // flush pre-roll + reconnect audio
                 case .close:
                     streaming = false
                     client.finalize()
@@ -57,7 +81,7 @@ final class VadGatedSource: @unchecked Sendable {
             }
             // Stream live only when already open; the opening chunk was just flushed.
             if streaming && gate.isOpen && !justOpened {
-                client.sendAudio(pcm16)
+                client.sendAudio(pcm16); onSent()
             }
         }
     }

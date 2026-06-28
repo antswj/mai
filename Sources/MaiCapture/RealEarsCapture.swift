@@ -31,8 +31,8 @@ extension RealEars {
         // VAD is off or the model fails to load, fall back to keeping both streams open.
         if cfg.vadEnabled, let micVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate),
            let systemVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate) {
-            setGates(mic: VadGatedSource(client: mic, vad: micVad, config: cfg),
-                     system: VadGatedSource(client: system, vad: systemVad, config: cfg))
+            setGates(mic: VadGatedSource(client: mic, vad: micVad, config: cfg, onSent: { [weak self] in self?.noteSent() }),
+                     system: VadGatedSource(client: system, vad: systemVad, config: cfg, onSent: { [weak self] in self?.noteSent() }))
         } else {
             setGates(mic: nil, system: nil)
             mic.connect()
@@ -50,6 +50,7 @@ extension RealEars {
     }
 
     private func handle(_ update: SonioxSegmenter.Update, source: SpeakerSource) {
+        noteTranscript()   // Soniox responded; transcript pipeline is alive
         if !update.live.isEmpty {
             emitPartial(update.live, speakerLabel: update.liveSpeaker, language: update.liveLanguage,
                         source: source, lineId: "live-\(source.rawValue)")

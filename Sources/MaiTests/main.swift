@@ -398,9 +398,9 @@ final class CollectingRichSink: RichCardSink, @unchecked Sendable {
 
 func enrich(_ request: LookupRequest, config: Config = Config(),
             entity: EntityLookup = StubEntityLookup(), grounded: GroundedSearch = StubGroundedSearch(),
-            trigger: TriggerType = .question) async -> (RichCard, CollectingRichSink) {
+            llm: LLMProvider = StubLLM(), trigger: TriggerType = .question) async -> (RichCard, CollectingRichSink) {
     let sink = CollectingRichSink()
-    let enricher = RichCardEnricher(config: config, llm: StubLLM(), entity: entity, grounded: grounded,
+    let enricher = RichCardEnricher(config: config, llm: llm, entity: entity, grounded: grounded,
                                     places: StubPlaces(), location: FixedLocation(lat: config.testLat, lng: config.testLng), sink: sink)
     let skeleton = RichCard(trigger: trigger, timestamp: Date(), route: .pending, headline: "test",
                             pending: [RichCard.Part.route.rawValue])
@@ -532,17 +532,31 @@ do {
     check(card.source == nil && card.imageURL == nil, "trivial cards have no source or image")
 }
 
-section("Enrichment: never fabricate (nothing found resolves honestly)")
+section("Enrichment: always gives info (model knowledge when the web finds nothing)")
 do {
     let emptyEntity = StubEntityLookup { _, _, _ in nil }
     let emptyGrounded = StubGroundedSearch { _, _ in GroundedResult(answer: "", sources: [], searchSuggestionHTML: nil) }
-    // "latest ..." routes to fresh (grounded); the empty grounded stub returns nothing.
+    // "latest ..." routes to fresh; empty grounded falls back to the model's knowledge.
     let (card, _) = await enrich(.knowledge(topic: "latest news on Zzxqq Unknownthing", window: "", spoken: .en, respond: false),
                                  entity: emptyEntity, grounded: emptyGrounded)
     check(card.route == .fresh, "freshness route taken")
-    check(card.pending.isEmpty, "card still resolves to a terminal state")
-    check(card.info?.lowercased().contains("could not find") == true, "says it found nothing rather than inventing")
-    check(card.source == nil && card.imageURL == nil, "no fabricated source or image")
+    check(card.pending.isEmpty, "card resolves to a terminal state")
+    check(card.info?.isEmpty == false, "still gives info: falls back to the model's own knowledge")
+    check(card.source == nil, "unsourced model knowledge carries no (fabricated) source")
+    check(card.imageURL == nil, "no fabricated image")
+}
+
+section("Enrichment: only a dead model yields the honest connectivity message")
+do {
+    // Everything fails: router parse fails (-> technical), entity nil, grounded empty,
+    // and the explainer returns nothing. Then, and only then, the card says so.
+    let deadLLM = StubLLM { _, _, _ in "{}" }
+    let emptyEntity = StubEntityLookup { _, _, _ in nil }
+    let emptyGrounded = StubGroundedSearch { _, _ in GroundedResult(answer: "", sources: [], searchSuggestionHTML: nil) }
+    let (card, _) = await enrich(.knowledge(topic: "anything at all", window: "", spoken: .en, respond: false),
+                                 entity: emptyEntity, grounded: emptyGrounded, llm: deadLLM)
+    check(card.pending.isEmpty, "card still resolves")
+    check(card.info?.lowercased().contains("could not reach") == true, "honest connectivity message, not invented facts")
 }
 
 section("Async enrichment: instant skeleton, transcript never blocked")
@@ -632,7 +646,8 @@ do {
 
 section("Rich engine: canonical reference card (floor-language reply with ruby + translation)")
 do {
-    let rig = makeRichRig(Config(floorLanguage: .ja, meetingMode: true))
+    // A prepared reply is a suggested reply, so it is gated on the reply toggle.
+    let rig = makeRichRig(Config(floorLanguage: .ja, meetingMode: true, responseEnabled: true))
     await rig.engine.process(tline("それでは、ご意見をお願いできますか？", "Sato"))
     let card = await waitResolved(rig.sink)
     check(card?.route == .preparedReply, "routed to preparedReply")
@@ -662,6 +677,40 @@ do {
     for _ in 0..<200 { if completions.value >= 1 { break }; try? await Task.sleep(nanoseconds: 10_000_000) }
     try? await Task.sleep(nanoseconds: 150_000_000)   // give a (cancelled) first task time to wrongly fire
     check(completions.value == 1, "the superseded first enrichment did not complete (only the second did)")
+}
+
+section("Reply lock: a reference cue surfaces a reply only when the toggle is on")
+do {
+    // Toggle OFF: a reference cue is reply-only, so nothing surfaces for it.
+    let rigOff = makeRichRig(Config(floorLanguage: .ja, responseEnabled: false))
+    await rigOff.engine.process(tline("それでは、ご意見をお願いできますか？", "Sato"))
+    try? await Task.sleep(nanoseconds: 250_000_000)
+    check(rigOff.sink.all.filter { !$0.suppressed }.isEmpty, "no card for a reference cue when replies are off")
+
+    // Toggle ON: the reference cue yields a prepared reply.
+    let rigOn = makeRichRig(Config(floorLanguage: .ja, responseEnabled: true))
+    await rigOn.engine.process(tline("それでは、ご意見をお願いできますか？", "Sato"))
+    let card = await waitResolved(rigOn.sink)
+    check(card?.response != nil, "reference cue yields a reply when replies are on")
+
+    // Info/fact cards still surface regardless of the reply toggle.
+    let rigInfo = makeRichRig(Config(responseEnabled: false))
+    await rigInfo.engine.process(tline("i'm going to Malaysia next month", "Jon"))
+    let infoCard = await waitResolved(rigInfo.sink)
+    check(infoCard?.info?.isEmpty == false, "info cards still appear when replies are off")
+    check(infoCard?.response == nil, "no suggested reply on an info card when replies are off")
+}
+
+section("Script detection: furigana/pinyin work even when the language is untagged")
+do {
+    check(ScriptDetect.language(of: "漢字を勉強する") == .ja, "kana present -> Japanese")
+    check(ScriptDetect.language(of: "确认一下") == .zh, "Han without kana -> Chinese")
+    check(ScriptDetect.language(of: "hello there") == .en, "Latin -> English")
+    // The guarantee the live transcript relies on: an untagged Japanese line still
+    // gets furigana because the view detects the script from the text.
+    let lang = ScriptDetect.language(of: "漢字を勉強する")
+    let units = Readings.units("漢字を勉強する", language: lang)
+    check(units.contains { ($0.reading?.contains("かん") == true) }, "untagged Japanese still gets furigana")
 }
 
 // ============================ Step 3: VAD gating ============================

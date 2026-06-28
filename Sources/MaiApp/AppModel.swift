@@ -58,6 +58,9 @@ final class AppModel: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var faceTask: Task<Void, Never>?
     private var richTask: Task<Void, Never>?
+    private var watchdogTask: Task<Void, Never>?
+    private var captureRetryTask: Task<Void, Never>?
+    private var lastRestartAt = Date.distantPast
 
     let fixtures = ["meeting_ja_en.txt", "meeting_zh.txt", "casual.txt"]
 
@@ -134,6 +137,8 @@ final class AppModel: ObservableObject {
         runTask?.cancel(); runTask = nil
         faceTask?.cancel(); faceTask = nil
         richTask?.cancel(); richTask = nil
+        watchdogTask?.cancel(); watchdogTask = nil
+        captureRetryTask?.cancel(); captureRetryTask = nil
         realEars?.stop(); realEyes?.stop()
         simEars?.finish(); simEyes?.finish()
     }
@@ -175,11 +180,75 @@ final class AppModel: ObservableObject {
         do {
             try await eyes.start()
             try await ears.start()
+            ears.resetHealth()
             captureState = .capturing
             status = "Capturing. Speak near the mic; advance a slide to test the screen."
+            startWatchdog()
         } catch {
-            fallBackToSimulated(reason: "Capture could not start: \(error.localizedDescription). Using simulated input.")
+            // Permissions were already granted (gated above), so this is a transient
+            // capture error: retry automatically rather than dropping to simulated.
+            captureState = .starting
+            status = "Capture error: \(error.localizedDescription). Retrying automatically..."
+            scheduleCaptureRetry()
         }
+    }
+
+    // Auto-retry real capture after a transient start failure, indefinitely (it is an
+    // always-on app), on a delay so it never tight-loops. Stops if paused or switched
+    // to simulated.
+    private func scheduleCaptureRetry(after seconds: Double = 8) {
+        captureRetryTask?.cancel()
+        captureRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self else { return }
+            guard !self.useSimulated, !self.isPaused, self.realEars != nil else { return }
+            await self.startCapture()
+        }
+    }
+
+    // Watchdog: keeps capture, transcription, and the card stream alive. Real audio
+    // flows continuously even in silence, so "no audio at all" means the capture
+    // stack died; "audio being sent but nothing transcribed back" means the Soniox
+    // pipeline stalled. Either way it kicks the session. It never restarts merely
+    // because the room is quiet, so it does not flap during normal pauses.
+    private func startWatchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { return }
+                await self.watchdogTick()
+            }
+        }
+    }
+
+    private func watchdogTick() {
+        guard captureState == .capturing, let ears = realEars else { return }
+        guard Date().timeIntervalSince(lastRestartAt) > 30 else { return }   // backoff between kicks
+        let h = ears.health()
+        if h.capturedAgo > 12 {
+            kick("capture stalled (no audio for \(Int(h.capturedAgo))s)")
+        } else if h.sentAgo < 6 && h.transcriptAgo > 20 {
+            // Audio is being sent but Soniox has gone quiet: reconnect the pipeline.
+            kick("transcription stalled (audio flowing, no transcript for \(Int(h.transcriptAgo))s)")
+        }
+    }
+
+    private func kick(_ why: String) {
+        lastRestartAt = Date()
+        FileHandle.standardError.write(Data("Mai watchdog: \(why); restarting capture.\n".utf8))
+        status = "Recovering: \(why)."
+        restartCapture()
+    }
+
+    // Tear the real-capture session down and bring it back up. Driven entirely by the
+    // watchdog, automatically; there is no manual control. Cards and transcript
+    // already shown are kept.
+    private func restartCapture() {
+        guard !useSimulated else { return }
+        stopSession()
+        useSimulated = false
+        startSession()
     }
 
     private func fallBackToSimulated(reason: String) {

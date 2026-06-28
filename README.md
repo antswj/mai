@@ -29,7 +29,18 @@ To keep always-on listening affordable, an on-device voice-activity detector
 (Silero VAD v5, fully local) gates each transcription stream: it opens on speech
 and tears the stream down during sustained silence (Soniox bills for the whole
 time a stream is open), flushing a short pre-roll so the first word is never
-clipped.
+clipped. If the detector ever misbehaves it fails open (keeps transcribing) rather
+than going silent.
+
+Capture is meant to stay up by itself. A built-in watchdog keeps watch with no
+buttons: real audio flows continuously even in silence, so if it stops, capture
+died; if audio is being sent but no transcript comes back, the speech pipeline
+stalled. Either way Mai restarts capture, transcription, and the card stream
+automatically, and a transient failure to start retries on its own. A card always
+shows the best information it can get: a Wikipedia summary or grounded web answer
+when available, otherwise the model's own general knowledge, rather than going
+blank. Suggested replies appear only when the **Reply** toggle is on; the
+information itself is always there.
 
 Clone it, add your own API keys, build the app bundle, grant two permissions, and it
 works. (Run unbundled with `swift run Mai` and it degrades to a typed-input dev mode.)

@@ -45,13 +45,38 @@ public final class RealEars: Ears, @unchecked Sendable {
         try await startCapture()
     }
 
+    // Liveness heartbeats for the watchdog: when audio was last captured from the
+    // system, last forwarded to Soniox, and last heard back from Soniox. These let
+    // the app tell "quiet" (normal) apart from "stuck" (audio flowing but no
+    // transcript) and "dead" (no audio at all) without false restarts during silence.
+    private let healthLock = NSLock()
+    private var _capturedAt = Date()
+    private var _sentAt = Date.distantPast
+    private var _transcriptAt = Date.distantPast
+    func noteCaptured() { healthLock.withLock { _capturedAt = Date() } }
+    func noteSent() { healthLock.withLock { _sentAt = Date() } }
+    func noteTranscript() { healthLock.withLock { _transcriptAt = Date() } }
+    public func resetHealth() { healthLock.withLock { let now = Date(); _capturedAt = now; _sentAt = now; _transcriptAt = now } }
+    public func health() -> (capturedAgo: TimeInterval, sentAgo: TimeInterval, transcriptAgo: TimeInterval) {
+        healthLock.withLock {
+            let now = Date()
+            return (now.timeIntervalSince(_capturedAt), now.timeIntervalSince(_sentAt), now.timeIntervalSince(_transcriptAt))
+        }
+    }
+
     // Accessors so the capture wiring (in another file) can reach the private state.
     func setClients(mic: SonioxClient, system: SonioxClient) { micClient = mic; systemClient = system }
     func setGates(mic: VadGatedSource?, system: VadGatedSource?) { micGate = mic; systemGate = system }
     func setAudioCapture(_ capture: AudioCapture) { audioCapture = capture }
     // Route audio through the VAD gate when present, else straight to the socket.
-    func feedMic(_ data: Data) { if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data) } }
-    func feedSystem(_ data: Data) { if let g = systemGate { g.feed(data) } else { systemClient?.sendAudio(data) } }
+    func feedMic(_ data: Data) {
+        noteCaptured()
+        if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent() }
+    }
+    func feedSystem(_ data: Data) {
+        noteCaptured()
+        if let g = systemGate { g.feed(data) } else { systemClient?.sendAudio(data); noteSent() }
+    }
 
     public func stop() {
         // Pause is a privacy valve: tear down capture AND close the sockets.
