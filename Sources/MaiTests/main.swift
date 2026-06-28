@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import MaiCore
 
 // Deterministic acceptance harness: the same checks as the swift-testing suite,
@@ -38,6 +39,20 @@ func tline(_ t: String, _ speaker: String? = nil) -> EngineInput {
 }
 func sscreen(_ c: String) -> EngineInput {
     .screen(ScreenContentEvent(content: c, timestamp: Date(), isChange: true))
+}
+
+// A synthetic float32 buffer (default 48kHz stereo) for exercising PCM16Converter.
+func makeFloatBuffer(sampleRate: Double = 48000, channels: AVAudioChannelCount = 2,
+                     frames: AVAudioFrameCount = 4800) -> AVAudioPCMBuffer {
+    let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                            channels: channels, interleaved: false)!
+    let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames)!
+    buf.frameLength = frames
+    for c in 0..<Int(channels) {
+        let p = buf.floatChannelData![c]
+        for i in 0..<Int(frames) { p[i] = sinf(Float(i) * 0.05) * 0.5 }
+    }
+    return buf
 }
 
 // 1) Mixed-language nearest sushi
@@ -243,6 +258,97 @@ do {
     check(rig.face.cards.first?.body.contains("launch checklist") == true, "stream path stores and surfaces the screen read")
     ears.finish(); eyes.finish()
     _ = await runTask.value
+}
+
+// ============================ Step 2: capture logic ============================
+
+section("Readings: Japanese furigana on kanji words only")
+do {
+    let units = Readings.units("漢字を勉強する。", language: .ja)
+    let reconstructed = units.map { $0.base }.joined()
+    check(reconstructed == "漢字を勉強する。", "units reconstruct the original line")
+    let kanjiUnits = units.filter { Readings.containsHan($0.base) }
+    check(!kanjiUnits.isEmpty && kanjiUnits.allSatisfy { $0.reading != nil }, "kanji words get a reading")
+    let kanaPunct = units.filter { !Readings.containsHan($0.base) }
+    check(kanaPunct.allSatisfy { $0.reading == nil }, "kana and punctuation get no reading")
+    if let kanji = units.first(where: { $0.base.contains("漢") }) {
+        check(kanji.reading?.contains("か") == true, "漢字 reading is hiragana (かんじ)")
+    } else { check(false, "found a 漢字 unit") }
+}
+
+section("Readings: Chinese pinyin on each hanzi")
+do {
+    let units = Readings.units("你好, world", language: .zh)
+    check(units.map { $0.base }.joined() == "你好, world", "units reconstruct the original line")
+    let hanzi = units.filter { Readings.containsHan($0.base) }
+    check(hanzi.count == 2, "each hanzi is its own unit")
+    check(hanzi.allSatisfy { ($0.reading ?? "").isEmpty == false }, "each hanzi gets a pinyin reading")
+    check(units.first(where: { $0.base == "你" })?.reading?.hasPrefix("n") == true, "你 -> nǐ")
+    check(units.contains { $0.base.contains("world") && $0.reading == nil }, "Latin run has no reading")
+}
+
+section("Soniox: config + token parsing + segmenter")
+do {
+    let cfg = SonioxConfig.json(apiKey: "K", model: "stt-rt-v5", sampleRate: 16000, channels: 1,
+                                languageHints: ["en", "ja", "zh"], languageId: true, diarization: true,
+                                translationTarget: nil)
+    check(cfg.contains("\"model\":\"stt-rt-v5\"") || cfg.contains("\"model\": \"stt-rt-v5\""), "config carries the model")
+    check(cfg.contains("pcm_s16le"), "config requests raw pcm_s16le")
+    check(cfg.contains("16000"), "config carries the sample rate")
+
+    let seg = SonioxSegmenter()
+    // partial first
+    let m1 = SonioxMessage.parse(#"{"tokens":[{"text":"お寿","is_final":false,"speaker":"1","language":"ja"}]}"#)!
+    let u1 = seg.ingest(m1)
+    check(u1.finals.isEmpty && u1.live.contains("お寿"), "partial appears in live line, no final yet")
+    // finals + endpoint marker
+    let m2 = SonioxMessage.parse(#"{"tokens":[{"text":"お寿司","is_final":true,"speaker":"1","language":"ja"},{"text":"が食べたい","is_final":true,"speaker":"1","language":"ja"},{"text":"<end>","is_final":true}]}"#)!
+    let u2 = seg.ingest(m2)
+    check(u2.finals.count == 1, "endpoint marker finalizes one segment")
+    check(u2.finals.first?.text == "お寿司が食べたい", "segment text is the joined finals")
+    check(u2.finals.first?.speakerLabel == "1", "segment carries the diarization speaker label")
+    check(u2.finals.first?.language == "ja", "segment carries the language tag")
+}
+
+section("FrameDiff: dHash and change detection")
+do {
+    let flat = [UInt8](repeating: 128, count: 72)               // adjacent pairs equal -> hash 0
+    var descending = [UInt8](repeating: 0, count: 72)           // left > right everywhere -> hash all 1s
+    for row in 0..<8 { for col in 0..<9 { descending[row * 9 + col] = UInt8(max(0, 240 - col * 28)) } }
+    let hFlat = FrameDiff.dHash9x8(flat)
+    let hDesc = FrameDiff.dHash9x8(descending)
+    check(FrameDiff.changeFraction(hFlat, hFlat) == 0.0, "identical frames have zero change")
+    check(!FrameDiff.changed(hFlat, hFlat, threshold: 0.15), "identical frames are not a change")
+    check(FrameDiff.changed(hDesc, hFlat, threshold: 0.15), "a clearly different frame is a change")
+    // minor noise: nudge a couple of pixels slightly, should stay under threshold
+    var noisy = descending; noisy[5] = noisy[5] &+ 1; noisy[40] = noisy[40] &+ 1
+    check(!FrameDiff.changed(hDesc, FrameDiff.dHash9x8(noisy), threshold: 0.15), "tiny noise stays below threshold")
+}
+
+section("SpeakerNaming: source + diarization + screen, with fallback")
+do {
+    var reg = SpeakerRegistry(userName: "You")
+    check(reg.displayName(source: .user, cluster: nil) == "You", "mic is the user")
+    check(reg.displayName(source: .remote, cluster: "1") == "Speaker 1", "unbound remote falls back to diarization label")
+    reg.observe(activeCluster: "1", highlightedName: "Tanaka")
+    check(reg.displayName(source: .remote, cluster: "1") == "Tanaka", "screen highlight binds a real name")
+    reg.observe(activeCluster: "1", highlightedName: nil)
+    check(reg.displayName(source: .remote, cluster: "1") == "Tanaka", "a nil highlight does not clobber a binding")
+    reg.rename(cluster: "2", to: "Sato")
+    reg.observe(activeCluster: "2", highlightedName: "WrongName")
+    check(reg.displayName(source: .remote, cluster: "2") == "Sato", "manual rename wins over the screen")
+}
+
+section("PCM16Converter: 48k float stereo -> 16k int16 mono")
+do {
+    let conv = PCM16Converter(sampleRate: 16000)
+    let input = makeFloatBuffer(sampleRate: 48000, channels: 2, frames: 4800) // 0.1s
+    guard let data = conv.convert(input) else { check(false, "conversion produced data"); fatalError() }
+    check(!data.isEmpty, "conversion produced non-empty PCM")
+    check(data.count % 2 == 0, "output is whole Int16 samples")
+    let frames = data.count / 2
+    // 4800 in at 48k -> ~1600 at 16k; the first chunk loses some to resampler warmup.
+    check(frames > 1000 && frames < 2000, "clearly downsampled ~3x from 4800 (got \(frames))")
 }
 
 // Summary
