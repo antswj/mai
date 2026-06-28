@@ -10,6 +10,12 @@ struct MaiApp: App {
     @StateObject private var model = AppModel()
 
     init() {
+        // Launched via `open Mai.app`, the working directory is "/", so the relative
+        // paths the app reads (.env, config.toml, data/, prompt files) would not
+        // resolve. Mai.app is built into the repo root by make-app.sh, so point the
+        // working directory there. Runs before AppModel is created.
+        Self.useRepoWorkingDirectory()
+
         // Use NSApplication.shared (not the NSApp global, which is still nil this
         // early in the SwiftUI lifecycle) to create the app and promote it from an
         // accessory so a non-bundled `swift run` binary shows and foregrounds.
@@ -18,6 +24,21 @@ struct MaiApp: App {
         DispatchQueue.main.async {
             app.activate()                          // current macOS 14+ API
             app.windows.first?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private static func useRepoWorkingDirectory() {
+        let fm = FileManager.default
+        func hasConfig(_ dir: String) -> Bool {
+            fm.fileExists(atPath: dir + "/.env") || fm.fileExists(atPath: dir + "/config.toml")
+        }
+        if let home = ProcessInfo.processInfo.environment["MAI_HOME"], hasConfig(home) {
+            fm.changeCurrentDirectoryPath(home); return
+        }
+        // Bundled (Mai.app): the bundle sits in the repo root next to .env/config.toml.
+        if Bundle.main.bundleIdentifier != nil {
+            let bundleDir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
+            if hasConfig(bundleDir) { fm.changeCurrentDirectoryPath(bundleDir) }
         }
     }
 

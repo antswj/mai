@@ -42,6 +42,9 @@ BIN="$(swift build -c release --show-bin-path)/${APP_NAME}"
 rm -rf "$APP"
 mkdir -p "$MACOS"
 cp "$BIN" "$MACOS/${APP_NAME}"
+# Copy SwiftPM resource bundles (e.g. Mai_MaiCore.bundle holding the prompt
+# templates) next to the executable so Bundle.module resolves inside the app.
+cp -R "$(dirname "$BIN")"/*.bundle "$MACOS"/ 2>/dev/null || true
 
 # Info.plist is written before signing (signing seals it).
 cat > "${CONTENTS}/Info.plist" <<PLIST
