@@ -83,7 +83,7 @@ public final class RealEars: Ears, @unchecked Sendable {
         cont.yield(event)
         let lang = segment.language.flatMap { Language(rawValue: $0) }
         onLive?(LiveTranscriptLine(id: UUID().uuidString, speaker: speaker, source: source,
-                                   text: segment.text, language: lang, isFinal: true))
+                                   cluster: segment.speakerLabel, text: segment.text, language: lang, isFinal: true))
     }
 
     // Emit a live partial line to the UI only (never to the engine).
@@ -92,6 +92,6 @@ public final class RealEars: Ears, @unchecked Sendable {
         let speaker = resolveName(source: source, cluster: speakerLabel)
         let lang = language.flatMap { Language(rawValue: $0) }
         onLive?(LiveTranscriptLine(id: lineId, speaker: speaker, source: source,
-                                   text: text, language: lang, isFinal: false))
+                                   cluster: speakerLabel, text: text, language: lang, isFinal: false))
     }
 }

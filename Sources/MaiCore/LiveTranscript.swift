@@ -17,13 +17,14 @@ public struct LiveTranscriptLine: Sendable, Identifiable {
     public let id: String
     public var speaker: String
     public var source: SpeakerSource
+    public var cluster: String?   // diarization label, for a manual rename
     public var text: String
     public var language: Language?
     public var translation: String?
     public var isFinal: Bool
-    public init(id: String, speaker: String, source: SpeakerSource, text: String,
+    public init(id: String, speaker: String, source: SpeakerSource, cluster: String? = nil, text: String,
                 language: Language?, translation: String? = nil, isFinal: Bool) {
-        self.id = id; self.speaker = speaker; self.source = source; self.text = text
+        self.id = id; self.speaker = speaker; self.source = source; self.cluster = cluster; self.text = text
         self.language = language; self.translation = translation; self.isFinal = isFinal
     }
 }

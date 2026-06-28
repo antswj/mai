@@ -29,3 +29,11 @@ DerivedData/
 # promptfoo local output
 .promptfoo/
 Evals/output/
+
+# Built app bundle (run ./make-app.sh locally; never committed)
+Mai.app/
+# Local capture caches and clips
+*.aiff
+*.wav
+*.m4a
+screenshots/

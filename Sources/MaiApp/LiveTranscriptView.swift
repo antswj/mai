@@ -7,6 +7,8 @@ import MaiCore
 // when ruby is enabled, with the English translation as a dimmer line underneath.
 struct LiveTranscriptView: View {
     @ObservedObject var model: AppModel
+    @State private var renameTarget: LiveTranscriptLine?
+    @State private var renameText: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -28,6 +30,11 @@ struct LiveTranscriptView: View {
                                                    active: idx == model.liveLines.count - 1,
                                                    ruby: model.config.ruby)
                                     .id(line.id)
+                                    .contextMenu {
+                                        Button("Rename speaker...") {
+                                            renameTarget = line; renameText = line.speaker
+                                        }
+                                    }
                             }
                         }
                         .padding(.vertical, 8)
@@ -42,6 +49,16 @@ struct LiveTranscriptView: View {
         }
         .padding(12)
         .frame(minWidth: 320)
+        .alert("Rename speaker", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } })) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let target = renameTarget { model.renameSpeaker(target, to: renameText) }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        }
     }
 }
 

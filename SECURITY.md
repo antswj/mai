@@ -12,10 +12,32 @@ grows.
 - Capture stays on the machine. Transcript and screen reads are sensitive and never
   leave the device except as the user's own provider API calls.
 
+## Continuous capture (step 2)
+
+Step 2 adds the most sensitive surface yet: always-on audio and screen capture.
+
+- Microphone and system audio are captured via ScreenCaptureKit, with
+  `excludesCurrentProcessAudio` so Mai never records its own output. Audio is
+  converted locally to PCM and streamed only to the user's own Soniox account for
+  transcription. Screen frames are watched locally; only a settled, changed frame is
+  sent to the user's own Gemini account for a read. Nothing is captured, transcribed,
+  read, or stored for any other destination, and there is no telemetry.
+- The pause control is a real privacy valve: it tears the capture down and closes
+  the Soniox sockets (it does not merely mute). When paused, nothing is captured,
+  transcribed, read, or stored until resumed.
+- Permissions: real capture needs Screen Recording and Microphone grants, which only
+  a signed `.app` bundle can hold (`./make-app.sh`, then `open Mai.app`). Run
+  unbundled (`swift run Mai`) and Mai degrades to simulated input rather than
+  capturing. Microphone use is declared in the bundle via `NSMicrophoneUsageDescription`.
+- New local-only artifacts: the SQLite store and the JSONL raw log under `data/`
+  (gitignored); transcription audio clips used by the smoke test are written to the
+  system temp directory, never the repo. Participant names and rosters inferred from
+  the screen are session-only and never committed.
+
 ## Secrets
 
-- The five API keys live in `.env`, which is gitignored. Only `.env.example` (with
-  placeholders) is committed.
+- The six API keys live in `.env`, which is gitignored. Only `.env.example` (with
+  placeholders) is committed. Step 2 adds `SONIOX_API_KEY`.
 - `.gitignore` excludes `.env` and `.env.*` (except the example), the data
   directory, and `*.sqlite` / `*.jsonl` capture files.
 - A pre-commit hook (`.githooks/pre-commit`, enabled with

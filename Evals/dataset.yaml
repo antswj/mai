@@ -64,3 +64,20 @@
   assert:
     - type: llm-rubric
       value: "The 'triggers' array contains a 'question' or 'intent' trigger about Malaysia (a delightful fun fact would fit). It must NOT be a 'place' trigger."
+
+# These two represent lines as they arrive from live transcription of a meeting,
+# exercising the transcription-to-trigger flow at the text level (the audio side is
+# covered by the live `swift run MaiSmoke soniox` check).
+- description: transcribed remote speaker asks the user to respond (English)
+  vars:
+    conversation: "Tanaka: So, what do you think we should do about the timeline?"
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'reference' trigger: the user is being asked to respond."
+
+- description: transcribed English screen cue fires screenReference
+  vars:
+    conversation: "Lee: As you can see on the screen here, the numbers are up."
+  assert:
+    - type: llm-rubric
+      value: "The 'triggers' array contains a 'screenReference' trigger (the speaker points at the shared screen)."

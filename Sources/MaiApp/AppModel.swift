@@ -214,6 +214,20 @@ final class AppModel: ObservableObject {
         status = "Screen updated (stored, surfaced when pointed at)."
     }
 
+    // Manual speaker rename, persists for the session (real-capture path).
+    func renameSpeaker(_ line: LiveTranscriptLine, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        switch line.source {
+        case .user: realEars?.renameUser(to: trimmed)
+        case .remote: if let cluster = line.cluster { realEars?.renameRemote(cluster: cluster, to: trimmed) }
+        }
+        // Reflect the new name on lines already shown for this speaker.
+        for i in liveLines.indices where liveLines[i].speaker == line.speaker && liveLines[i].source == line.source {
+            liveLines[i].speaker = trimmed
+        }
+    }
+
     func summarize() {
         Task {
             if let s = await engine.summarize() {
