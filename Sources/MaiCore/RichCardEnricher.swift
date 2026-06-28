@@ -147,6 +147,12 @@ public actor RichCardEnricher {
     // MARK: - Content fetchers (nonisolated: run off-actor, concurrently)
 
     private nonisolated func knowledgeContent(plan: LookupPlan, topic: String, window: String) async -> ContentOutcome {
+        // A card should ALWAYS end up with some info. Try the best-sourced lookup
+        // first, but if it comes up empty, fall through to a grounded answer and then
+        // to the model's own general knowledge, rather than showing "nothing found".
+        // Sourced is preferred, not required; one source (or none, for a plain
+        // knowledge answer) is fine. Nothing is invented: a plain answer simply
+        // carries no source line.
         switch plan.route {
         case .entity:
             let term = plan.entity ?? topic
@@ -158,19 +164,30 @@ public actor RichCardEnricher {
                 return ContentOutcome(info: r.summary, image: r.imageURL, source: src,
                                       html: nil, action: nil, sources: [src])
             }
-            // Entity not found: fall back to a grounded answer (still real and sourced).
-            return await groundedContent(query: plan.query)
+            let grounded = await groundedContent(query: plan.query)
+            if grounded.info != nil { return grounded }
+            return await explainContent(topic: topic, window: window)
         case .fresh:
-            return await groundedContent(query: plan.query)
+            let grounded = await groundedContent(query: plan.query)
+            if grounded.info != nil { return grounded }
+            return await explainContent(topic: topic, window: window)
         case .technical:
-            if plan.needsSearch { return await groundedContent(query: plan.query) }
-            let answer: String? = (await withTimeoutOrNil(seconds: config.onlineCapSeconds) { [self] in
-                try await explain(topic: topic, window: window)
-            }) ?? nil
-            return ContentOutcome(info: answer, image: nil, source: nil, html: nil, action: nil)
+            if plan.needsSearch {
+                let grounded = await groundedContent(query: plan.query)
+                if grounded.info != nil { return grounded }
+            }
+            return await explainContent(topic: topic, window: window)
         default:
-            return ContentOutcome(info: nil, image: nil, source: nil, html: nil, action: nil)
+            return await explainContent(topic: topic, window: window)
         }
+    }
+
+    // Last-resort content: the model's own general knowledge, no web, no source.
+    private nonisolated func explainContent(topic: String, window: String) async -> ContentOutcome {
+        let answer: String? = (await withTimeoutOrNil(seconds: config.onlineCapSeconds) { [self] in
+            try await explain(topic: topic, window: window)
+        }) ?? nil
+        return ContentOutcome(info: answer, image: nil, source: nil, html: nil, action: nil)
     }
 
     private nonisolated func groundedContent(query: String) async -> ContentOutcome {
@@ -330,11 +347,14 @@ public actor RichCardEnricher {
         d == d.rounded() ? String(Int(d)) : String(format: "%.1f", d)
     }
 
+    // Only reached when even the model could not be contacted (e.g. the network is
+    // down): every route falls through to a general-knowledge answer first, so this
+    // is a connectivity message, not "no answer exists".
     static func noResult(_ l: Language) -> String {
         switch l {
-        case .en: return "I could not find a reliable answer for this."
-        case .ja: return "確かな情報が見つかりませんでした。"
-        case .zh: return "没有找到可靠的答案。"
+        case .en: return "Could not reach the answer service just now; will retry on the next mention."
+        case .ja: return "今は情報を取得できませんでした。次に話題に出たときに再取得します。"
+        case .zh: return "暂时无法获取信息，下次提到时会再试。"
         }
     }
 }

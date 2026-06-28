@@ -143,14 +143,19 @@ struct ResponseBlock: View {
     let response: RichResponse
     var ruby: Bool
 
-    private var useRuby: Bool { ruby && response.language != .en }
+    // Render ruby whenever the reply text is actually CJK, trusting the response's
+    // language tag but falling back to detecting the script from the text.
+    private var effectiveLanguage: Language {
+        response.language != .en ? response.language : ScriptDetect.language(of: response.spoken)
+    }
+    private var useRuby: Bool { ruby && effectiveLanguage != .en && !response.spoken.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Label("Suggested reply", systemImage: "bubble.left.and.bubble.right")
                 .font(.caption).foregroundStyle(.secondary)
             if useRuby {
-                RubyLineView(units: Readings.units(response.spoken, language: response.language), baseFont: 18)
+                RubyLineView(units: Readings.units(response.spoken, language: effectiveLanguage), baseFont: 18)
             } else {
                 Text(response.spoken).font(.system(.body, weight: .medium)).textSelection(.enabled)
             }

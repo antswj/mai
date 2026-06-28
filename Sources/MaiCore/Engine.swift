@@ -129,7 +129,13 @@ public actor Engine {
         save(record(kind: "transcript", content: event.text, language: nil, speaker: event.speaker, at: event.timestamp))
         verbatim.appendTranscript(event, sessionId: session.id)
 
-        let triggers = await classifier.classify(window: context.window(), now: event.timestamp)
+        // Bound the classifier call so a hung LLM request can never freeze the
+        // always-on loop (a freeze here would stop every card until it unblocked).
+        let window = context.window()
+        let ts = event.timestamp
+        let triggers = (await withTimeoutOrNil(seconds: max(8, config.onlineCapSeconds * 2)) { [classifier] in
+            await classifier.classify(window: window, now: ts)
+        }) ?? []
         for trigger in triggers {
             await handle(trigger, event: event, t0: t0)
         }
@@ -146,6 +152,10 @@ public actor Engine {
     // MARK: - Rich path (Step 3): instant skeleton, async enrichment, no lag
 
     private func handleRich(_ trigger: Trigger, event: TranscriptEvent, t0: Date, enricher: RichCardEnricher) {
+        // Reply lock: a reference cue ("your turn", "ご意見を…") yields only a suggested
+        // reply, so with the reply toggle off there is nothing to surface for it.
+        // Info/fact cards (place, knowledge, screen) always surface regardless.
+        if trigger.type == .reference && !config.responseEnabled { return }
         let topic = (trigger.payload["query"] ?? trigger.span).trimmingCharacters(in: .whitespacesAndNewlines)
         let headline = headline(for: trigger, topic: topic)
         let pre = surfacing.preEvaluate(trigger: trigger, headline: headline, now: event.timestamp)

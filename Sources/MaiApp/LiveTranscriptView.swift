@@ -67,13 +67,21 @@ struct TranscriptLineView: View {
     let active: Bool
     let ruby: Bool
 
+    // Furigana/pinyin must show whenever the text is actually CJK, even when Soniox
+    // leaves the language untagged (nil) or mis-tags a code-switched line. Trust the
+    // line's language only when it is ja/zh; otherwise detect the script from the text.
+    private var effectiveLanguage: Language {
+        if let lang = line.language, lang != .en { return lang }
+        return ScriptDetect.language(of: line.text)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(line.speaker)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            if ruby, let lang = line.language, lang != .en {
-                RubyLineView(units: Readings.units(line.text, language: lang),
+            if ruby, effectiveLanguage != .en, !line.text.isEmpty {
+                RubyLineView(units: Readings.units(line.text, language: effectiveLanguage),
                              baseFont: active ? 22 : 17,
                              dim: active ? 0 : 0.45)
             } else {
