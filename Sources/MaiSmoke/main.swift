@@ -1,4 +1,7 @@
 import Foundation
+import CoreGraphics
+import CoreText
+import AppKit
 import MaiCore
 import MaiCapture
 
@@ -136,12 +139,51 @@ func smokeSoniox() async {
     }
 }
 
+// Render a small sanitized slide (no real data) for the screen-read check.
+func renderSlidePNG() -> Data? {
+    let w = 640, h = 360
+    let cs = CGColorSpaceCreateDeviceRGB()
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    ctx.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1))
+    func draw(_ s: String, size: CGFloat, y: CGFloat) {
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, size, nil)
+        let attr = NSAttributedString(string: s, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+        let lineToDraw = CTLineCreateWithAttributedString(attr)
+        ctx.textPosition = CGPoint(x: 40, y: y)
+        CTLineDraw(lineToDraw, ctx)
+    }
+    draw("Q3 Revenue Overview", size: 44, y: CGFloat(h - 90))
+    draw("Revenue up 18% year over year", size: 28, y: CGFloat(h - 170))
+    guard let cg = ctx.makeImage() else { return nil }
+    return NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])
+}
+
+func smokeScreen() async {
+    line(); print("Screen-read smoke (Gemini \(config.screenModel)) on a generated slide")
+    guard let key = secrets.get("GEMINI_API_KEY") else { print("  no GEMINI_API_KEY, skipped"); return }
+    guard let png = renderSlidePNG() else { print("  could not render slide"); return }
+    do {
+        let text = try await GeminiVision(apiKey: key, model: config.screenModel)
+            .read(imageData: png, mimeType: "image/png",
+                  prompt: "Read this screen and say in one sentence what it shows.")
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("  read: \(trimmed)")
+        let low = trimmed.lowercased()
+        let ok = low.contains("revenue") || low.contains("q3") || low.contains("18")
+        print("  RESULT: \(ok ? "ok (read the slide text)" : "uncertain (no expected keywords)")")
+    } catch { print("  Gemini ERROR: \(error)") }
+}
+
 switch which {
 case "llm": await smokeLLM()
 case "places": await smokePlaces()
 case "vision": await smokeVision()
 case "soniox": await smokeSoniox()
+case "screen": await smokeScreen()
 default:
-    await smokeLLM(); await smokePlaces(); await smokeVision(); await smokeSoniox()
+    await smokeLLM(); await smokePlaces(); await smokeVision(); await smokeSoniox(); await smokeScreen()
 }
 line(); print("Smoke tests done.")
