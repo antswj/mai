@@ -44,7 +44,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>   <string>${VERSION}</string>
     <key>CFBundleVersion</key>              <string>${BUILD}</string>
     <key>LSMinimumSystemVersion</key>       <string>${MIN_OS}</string>
-    <key>NSMicrophoneUsageDescription</key> <string>Mai transcribes your microphone while it is listening.</string>
+    <key>NSMicrophoneUsageDescription</key> <string>Mai uses the microphone to transcribe your speech in real time during meetings.</string>
 </dict>
 </plist>
 PLIST

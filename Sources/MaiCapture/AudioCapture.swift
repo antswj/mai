@@ -41,9 +41,9 @@ public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     public func start() async throws {
-        // Microphone needs its own TCC grant in addition to Screen Recording.
-        _ = await AVCaptureDevice.requestAccess(for: .audio)
-
+        // Microphone and Screen Recording grants are requested and verified up front
+        // by CapturePermissions before this runs, so the SCStream only starts when
+        // both are granted.
         let content = try await SCShareableContent.current
         guard let display = content.displays.first else { throw CaptureError.noDisplay }
         // Audio capture requires a valid display filter even though we ignore video.

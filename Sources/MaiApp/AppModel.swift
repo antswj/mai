@@ -123,19 +123,43 @@ final class AppModel: ObservableObject {
 
     private func startCapture() async {
         guard let ears = realEars, let eyes = realEyes else { return }
+        // Gate on BOTH permissions before any SCStream starts. Requesting the mic
+        // here (not buried in the audio stream) is what makes the system prompt fire
+        // and lists Mai under Privacy, Microphone.
+        let perms = await CapturePermissions.ensure()
+        guard perms.bothGranted else {
+            FileHandle.standardError.write(Data("Mai: capture blocked, missing permission(s): \(perms.missing.joined(separator: ", "))\n".utf8))
+            fallBackToSimulated(reason: Self.permissionMessage(perms))
+            return
+        }
         do {
             try await eyes.start()
             try await ears.start()
             captureState = .capturing
             status = "Capturing. Speak near the mic; advance a slide to test the screen."
         } catch {
-            captureState = .unavailable(friendly(error))
-            status = "Capture unavailable. Grant Screen Recording and Microphone, then relaunch Mai.app. Or use simulated input."
+            fallBackToSimulated(reason: "Capture could not start: \(error.localizedDescription). Using simulated input.")
         }
     }
 
-    private func friendly(_ error: Error) -> String {
-        "permission or capture error: \(error.localizedDescription)"
+    private func fallBackToSimulated(reason: String) {
+        stopSession()
+        useSimulated = true
+        startSession()                      // builds the simulated session
+        captureState = .unavailable(reason) // override so the bar shows why capture is off
+        status = reason
+    }
+
+    private static func permissionMessage(_ p: CapturePermissionStatus) -> String {
+        var parts: [String] = []
+        if !p.microphoneGranted {
+            parts.append("Microphone access is required for live transcription. Please enable it in System Settings, Privacy and Security, Microphone.")
+        }
+        if !p.screenRecordingGranted {
+            parts.append("Screen Recording access is required. Please enable Mai in System Settings, Privacy and Security, Screen and System Audio Recording, then relaunch Mai.app.")
+        }
+        parts.append("Using simulated input until then.")
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Pause (privacy valve): tears capture down and closes Soniox sockets

@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import MaiCore
+import MaiCapture
 
 // Deterministic acceptance harness: the same checks as the swift-testing suite,
 // driven through the PUBLIC engine with StubLLM + StubPlaces (zero live calls), in
@@ -360,6 +361,18 @@ do {
     let frames = data.count / 2
     // 4800 in at 48k -> ~1600 at 16k; the first chunk loses some to resampler warmup.
     check(frames > 1000 && frames < 2000, "clearly downsampled ~3x from 4800 (got \(frames))")
+}
+
+section("CapturePermissions: gate status and missing list")
+do {
+    check(!CapturePermissionStatus(microphoneGranted: false, screenRecordingGranted: true).bothGranted,
+          "mic missing means not both granted")
+    check(CapturePermissionStatus(microphoneGranted: true, screenRecordingGranted: true).bothGranted,
+          "both granted")
+    check(CapturePermissionStatus(microphoneGranted: false, screenRecordingGranted: false).missing == ["Microphone", "Screen Recording"],
+          "missing lists both")
+    check(CapturePermissionStatus(microphoneGranted: true, screenRecordingGranted: false).missing == ["Screen Recording"],
+          "missing lists only screen recording")
 }
 
 // Summary
