@@ -73,6 +73,16 @@ public enum SonioxConfig {
     }
 }
 
+// Reconnect backoff for the Soniox socket: a meeting can have long silences (the
+// server closes after 3 minutes of no audio) and networks blip, so the client
+// reconnects with a capped exponential backoff. Pure, so it is unit-tested.
+public enum SonioxBackoff {
+    public static func delaySeconds(attempt: Int, base: Double = 0.5, cap: Double = 20) -> Double {
+        guard attempt > 0 else { return base }
+        return min(cap, base * pow(2.0, Double(attempt - 1)))
+    }
+}
+
 // A finalized utterance: original spoken text, the raw diarization speaker label
 // (resolved to a display name elsewhere), and the dominant language.
 public struct SonioxSegment: Sendable, Equatable {

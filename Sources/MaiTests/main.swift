@@ -314,6 +314,11 @@ do {
     check(u2.finals.first?.text == "お寿司が食べたい", "segment text is the joined finals")
     check(u2.finals.first?.speakerLabel == "1", "segment carries the diarization speaker label")
     check(u2.finals.first?.language == "ja", "segment carries the language tag")
+
+    // Reconnect backoff (capped exponential).
+    check(SonioxBackoff.delaySeconds(attempt: 1) == 0.5, "first reconnect waits the base delay")
+    check(SonioxBackoff.delaySeconds(attempt: 3) == 2.0, "backoff grows exponentially")
+    check(SonioxBackoff.delaySeconds(attempt: 20) == 20.0, "backoff is capped")
 }
 
 section("FrameDiff: dHash and change detection")

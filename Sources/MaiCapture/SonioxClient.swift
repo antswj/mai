@@ -20,6 +20,8 @@ public final class SonioxClient: @unchecked Sendable {
     private var keepalive: Task<Void, Never>?
     private let lock = NSLock()
     private var closed = false
+    private var reconnecting = false
+    private var attempts = 0
 
     public init(configJSON: String, onUpdate: @escaping UpdateHandler, onError: (@Sendable (String) -> Void)? = nil) {
         self.configJSON = configJSON
@@ -29,22 +31,29 @@ public final class SonioxClient: @unchecked Sendable {
     }
 
     public func connect() {
+        lock.withLock { closed = false }
+        openSocket()
+        startKeepalive()
+    }
+
+    // Open (or re-open) the socket and re-send the config (there is no resume token,
+    // so a reconnect starts a fresh Soniox session, which is expected).
+    private func openSocket() {
         let t = session.webSocketTask(with: Self.endpoint)
-        lock.withLock { task = t; closed = false }
+        lock.withLock { task = t }
         t.resume()
         t.send(.string(configJSON)) { [weak self] err in
             if let err { self?.onError?("soniox config send: \(err.localizedDescription)") }
         }
         receiveLoop()
-        startKeepalive()
     }
 
-    /// Stream a chunk of raw signed-16-bit little-endian PCM.
+    /// Stream a chunk of raw signed-16-bit little-endian PCM. Dropped while
+    /// disconnected or reconnecting so we never spam a dead socket.
     public func sendAudio(_ data: Data) {
-        guard let t = lock.withLock({ task }) else { return }
-        t.send(.data(data)) { [weak self] err in
-            if let err { self?.onError?("soniox audio send: \(err.localizedDescription)") }
-        }
+        let t: URLSessionWebSocketTask? = lock.withLock { (closed || reconnecting) ? nil : task }
+        guard let t else { return }
+        t.send(.data(data)) { _ in }
     }
 
     /// Ask Soniox to finalize everything buffered so far (no end of stream).
@@ -78,8 +87,10 @@ public final class SonioxClient: @unchecked Sendable {
             case .failure(let err):
                 if !self.lock.withLock({ self.closed }) {
                     self.onError?("soniox receive: \(err.localizedDescription)")
+                    self.scheduleReconnect()
                 }
             case .success(let message):
+                self.lock.withLock { self.attempts = 0 }   // healthy connection resets backoff
                 switch message {
                 case .string(let text): self.handle(text)
                 case .data(let data): if let s = String(data: data, encoding: .utf8) { self.handle(s) }
@@ -87,6 +98,24 @@ public final class SonioxClient: @unchecked Sendable {
                 }
                 self.receiveLoop()
             }
+        }
+    }
+
+    private func scheduleReconnect() {
+        let go: Bool = lock.withLock {
+            if closed || reconnecting { return false }
+            reconnecting = true
+            attempts += 1
+            task = nil
+            return true
+        }
+        guard go else { return }
+        let delay = SonioxBackoff.delaySeconds(attempt: lock.withLock { attempts })
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !self.lock.withLock({ self.closed }) else { return }
+            self.openSocket()
+            self.lock.withLock { self.reconnecting = false }
         }
     }
 
