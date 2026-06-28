@@ -206,13 +206,15 @@ func smokeGrounded() async {
 func smokeEntity() async {
     line(); print("Entity smoke (Wikipedia summary + cross-language resolution)")
     let entity = MaiFactory.makeEntityLookup(config: config, secrets: secrets)
-    do {
-        if let r = try await entity.lookup(term: "Malaysia", spoken: .en, interface: config.interfaceLanguage) {
-            print("  \(r.title): \(r.summary.prefix(90))...")
-            print("  image: \(r.imageURL ?? "none")  source: \(r.sourceURL)")
-            print("  RESULT: ok")
-        } else { print("  RESULT: uncertain (no result)") }
-    } catch { print("  Wikipedia ERROR: \(error)") }
+    let cases: [(String, Language)] = [("Malaysia", .en), ("寿司", .ja), ("马来西亚", .zh)]
+    for (term, spoken) in cases {
+        do {
+            if let r = try await entity.lookup(term: term, spoken: spoken, interface: .en) {
+                print("  \(term) [\(spoken.rawValue)] -> \(r.title): \(r.summary.prefix(70))...")
+                print("    image: \(r.imageURL != nil ? "yes" : "none")  source: \(r.sourceURL)")
+            } else { print("  \(term): no result") }
+        } catch { print("  \(term) ERROR: \(error)") }
+    }
 }
 
 switch which {
