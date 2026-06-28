@@ -154,9 +154,9 @@ public actor RichCardEnricher {
                 try await entity.lookup(term: term, spoken: plan.spoken, interface: interface)
             }) ?? nil
             if let r = found {
-                return ContentOutcome(info: r.summary, image: r.imageURL,
-                                      source: RichSource(title: r.sourceTitle, url: r.sourceURL),
-                                      html: nil, action: nil)
+                let src = RichSource(title: r.sourceTitle, url: r.sourceURL)
+                return ContentOutcome(info: r.summary, image: r.imageURL, source: src,
+                                      html: nil, action: nil, sources: [src])
             }
             // Entity not found: fall back to a grounded answer (still real and sourced).
             return await groundedContent(query: plan.query)
@@ -180,7 +180,8 @@ public actor RichCardEnricher {
         guard let g, !g.answer.isEmpty else {
             return ContentOutcome(info: nil, image: nil, source: nil, html: nil, action: nil)
         }
-        return ContentOutcome(info: g.answer, image: nil, source: g.sources.first, html: g.searchSuggestionHTML, action: nil)
+        return ContentOutcome(info: g.answer, image: nil, source: g.sources.first,
+                              html: g.searchSuggestionHTML, action: nil, sources: g.sources)
     }
 
     private nonisolated func explain(topic: String, window: String) async throws -> String? {
@@ -277,6 +278,7 @@ public actor RichCardEnricher {
         case .content(let c, let elapsed):
             if let img = c.image { card.imageURL = img }
             if let src = c.source { card.source = src }
+            if !c.sources.isEmpty { card.sources = c.sources }
             if let html = c.html { card.searchSuggestionHTML = html }
             if let action = c.action { card.action = action }
             if let resp = c.response { card.response = resp }
@@ -344,11 +346,14 @@ struct ContentOutcome: Sendable {
     var info: String?
     var image: String?
     var source: RichSource?
+    var sources: [RichSource]
     var html: String?
     var action: Action?
     var response: RichResponse?
-    init(info: String?, image: String?, source: RichSource?, html: String?, action: Action?, response: RichResponse? = nil) {
-        self.info = info; self.image = image; self.source = source; self.html = html; self.action = action; self.response = response
+    init(info: String?, image: String?, source: RichSource?, html: String?, action: Action?,
+         sources: [RichSource] = [], response: RichResponse? = nil) {
+        self.info = info; self.image = image; self.source = source; self.html = html
+        self.action = action; self.sources = sources; self.response = response
     }
 }
 

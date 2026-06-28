@@ -95,19 +95,24 @@ struct RichCardRow: View {
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Preparing a reply...").font(.caption).foregroundStyle(.secondary) }
             }
 
-            // Real, tappable source.
-            if let source = card.source, let url = URL(string: source.url) {
-                Button {
-                    NSWorkspace.shared.open(url)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "link").font(.caption2)
-                        Text(source.title).font(.caption).lineLimit(1)
+            // Real, tappable sources (grounded search returns several; entity one).
+            let shownSources = card.sources.isEmpty ? (card.source.map { [$0] } ?? []) : Array(card.sources.prefix(4))
+            if !shownSources.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(shownSources.enumerated()), id: \.offset) { _, source in
+                        if let url = URL(string: source.url) {
+                            Button { NSWorkspace.shared.open(url) } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "link").font(.caption2)
+                                    Text(source.title).font(.caption).lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
                     }
-                }
-                .buttonStyle(.link)
-                if card.searchSuggestionHTML != nil {
-                    Text("via Google Search").font(.caption2).foregroundStyle(.secondary)
+                    if card.searchSuggestionHTML != nil {
+                        Text("via Google Search").font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
 

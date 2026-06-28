@@ -418,6 +418,22 @@ func waitResolved(_ sink: CollectingRichSink, timeoutMs: Int = 4000) async -> Ri
     return sink.all.first(where: { $0.pending.isEmpty }) ?? sink.all.first
 }
 
+// A deliberately slow entity lookup so supersede/cancel can be tested deterministically.
+struct SlowEntity: EntityLookup {
+    let delayMs: UInt64
+    func lookup(term: String, spoken: Language, interface: Language) async throws -> EntityResult? {
+        try await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        return EntityResult(title: term, summary: "slow", imageURL: nil, sourceURL: "https://example.org")
+    }
+}
+
+final class CompletionCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func inc() { lock.withLock { n += 1 } }
+    var value: Int { lock.withLock { n } }
+}
+
 struct RichRig { let engine: Engine; let sink: CollectingRichSink; let store: SQLiteStore }
 func makeRichRig(_ config: Config = Config(), entity: EntityLookup = StubEntityLookup(),
                  grounded: GroundedSearch = StubGroundedSearch(), places: PlacesProvider = StubPlaces()) -> RichRig {
@@ -484,12 +500,19 @@ do {
     check(cardZh.info?.contains("Southeast Asia") == true, "Chinese entity also resolves to an English summary")
 }
 
-section("Enrichment: fresh route (grounded, sourced, no image)")
+section("Enrichment: fresh route (grounded, multi-sourced, no image)")
 do {
-    let (card, _) = await enrich(.knowledge(topic: "latest news on the mission", window: "", spoken: .en, respond: false))
+    let multi = StubGroundedSearch { q, _ in
+        GroundedResult(answer: "Answer about \(q).",
+                       sources: [RichSource(title: "A", url: "https://a.example/1"),
+                                 RichSource(title: "B", url: "https://b.example/2")],
+                       searchSuggestionHTML: "<div>s</div>")
+    }
+    let (card, _) = await enrich(.knowledge(topic: "latest news on the mission", window: "", spoken: .en, respond: false), grounded: multi)
     check(card.route == .fresh, "route is fresh")
     check(card.info?.isEmpty == false, "synthesized answer present")
     check(card.source != nil, "grounded source present")
+    check(card.sources.count == 2, "all grounded sources retained (not just the first)")
     check(card.imageURL == nil, "grounded cards carry no image (never fabricated)")
 }
 
@@ -580,14 +603,65 @@ do {
     check(kinds.contains("card") && kinds.contains("note"), "rich card mapped down to memory (card + note)")
 }
 
-section("Rich engine: supersede cancels prior enrichment on the same topic")
+section("Rich engine: canonical place card (action + distance + Hot Pepper credit)")
+do {
+    let hp = StubPlaces(results: [
+        Place(name: "Sushi HP", source: "hotpepper", rating: nil, reviewCount: nil,
+              address: "Funabashi", lat: 35.70, lng: 139.98, url: "https://www.hotpepper.jp/strJ000/", distanceMeters: 150)
+    ])
+    let rig = makeRichRig(Config(), places: hp)
+    await rig.engine.process(tline("ngl ちょっとお寿司を食べたい気分", "Lee"))
+    let card = await waitResolved(rig.sink)
+    check(card?.route == .place, "routed to place")
+    check(card?.action?.kind == "open_in_maps", "open_in_maps action present")
+    check(card?.info?.contains("m away") == true, "computed distance shown")
+    check(card?.info?.contains("Powered by ホットペッパーグルメ Webサービス") == true, "Hot Pepper credit present")
+}
+
+section("Rich engine: canonical screen card surfaces the current slide, not the stale one")
 do {
     let rig = makeRichRig()
-    await rig.engine.process(tline("i'm going to Malaysia next month", "Jon"))
-    await rig.engine.process(tline("actually going to Malaysia for sure", "Jon"))
+    await rig.engine.process(sscreen("Slide 1: Q3 revenue overview"))
+    await rig.engine.process(sscreen("Slide 2: Q4 roadmap and hiring plan"))
+    await rig.engine.process(tline("画面を見てください", "Sato"))
     let card = await waitResolved(rig.sink)
-    check(card != nil, "a card still resolves after a supersede")
-    check(rig.sink.all.allSatisfy { $0.pending.isEmpty || $0.id != card?.id }, "no card left stuck mid-enrichment")
+    check(card?.route == .screen, "routed to screen")
+    check(card?.info?.contains("Q4 roadmap") == true, "surfaces the current stored read")
+    check(card?.info?.contains("Q3") == false, "does not surface the stale slide")
+}
+
+section("Rich engine: canonical reference card (floor-language reply with ruby + translation)")
+do {
+    let rig = makeRichRig(Config(floorLanguage: .ja, meetingMode: true))
+    await rig.engine.process(tline("それでは、ご意見をお願いできますか？", "Sato"))
+    let card = await waitResolved(rig.sink)
+    check(card?.route == .preparedReply, "routed to preparedReply")
+    check(card?.response?.spoken.contains("確認") == true, "floor-language line carries the kanji")
+    if let spoken = card?.response?.spoken {
+        let units = Readings.units(spoken, language: .ja)
+        check(units.contains { ($0.reading ?? "").contains("かくにん") }, "furigana for 確認 available over the reply")
+    } else { check(false, "reply text present") }
+    check(card?.response?.translation.isEmpty == false, "English translation present")
+}
+
+section("Rich enricher: a superseding submit on the same key cancels the first")
+do {
+    // The first enrichment is held in a slow lookup so it is genuinely in flight when
+    // the second submit (same key) cancels it; only the second reaches onComplete.
+    let sink = CollectingRichSink()
+    let enricher = RichCardEnricher(config: Config(), llm: StubLLM(), entity: SlowEntity(delayMs: 500),
+                                    grounded: StubGroundedSearch(), places: StubPlaces(),
+                                    location: FixedLocation(lat: 0, lng: 0), sink: sink)
+    let completions = CompletionCounter()
+    let skel1 = RichCard(trigger: .question, timestamp: Date(), headline: "first", pending: [RichCard.Part.route.rawValue])
+    let skel2 = RichCard(trigger: .question, timestamp: Date(), headline: "second", pending: [RichCard.Part.route.rawValue])
+    await enricher.submit(skel1, request: .knowledge(topic: "Malaysia", window: "", spoken: .en, respond: false),
+                          supersedeKey: "same") { _ in completions.inc() }
+    await enricher.submit(skel2, request: .knowledge(topic: "Malaysia", window: "", spoken: .en, respond: false),
+                          supersedeKey: "same") { _ in completions.inc() }
+    for _ in 0..<200 { if completions.value >= 1 { break }; try? await Task.sleep(nanoseconds: 10_000_000) }
+    try? await Task.sleep(nanoseconds: 150_000_000)   // give a (cancelled) first task time to wrongly fire
+    check(completions.value == 1, "the superseded first enrichment did not complete (only the second did)")
 }
 
 // ============================ Step 3: VAD gating ============================

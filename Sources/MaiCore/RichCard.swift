@@ -65,7 +65,8 @@ public struct RichCard: Sendable, Identifiable, Equatable {
     public var headline: String              // always present so the skeleton is meaningful
     public var info: String?                 // the answer, ALWAYS in the interface language
     public var imageURL: String?             // real image URL (Wikipedia/Places only); nil when none
-    public var source: RichSource?           // real, tappable
+    public var source: RichSource?           // the primary, real, tappable source
+    public var sources: [RichSource]         // all real sources (grounded search returns several)
     public var response: RichResponse?       // Part B; nil unless warranted
     public var action: Action?               // e.g. open_in_maps for a place
     public var searchSuggestionHTML: String? // Gemini grounded-search Search Suggestions (attribution)
@@ -87,6 +88,7 @@ public struct RichCard: Sendable, Identifiable, Equatable {
         info: String? = nil,
         imageURL: String? = nil,
         source: RichSource? = nil,
+        sources: [RichSource] = [],
         response: RichResponse? = nil,
         action: Action? = nil,
         searchSuggestionHTML: String? = nil,
@@ -99,7 +101,7 @@ public struct RichCard: Sendable, Identifiable, Equatable {
         self.id = id; self.trigger = trigger; self.timestamp = timestamp
         self.route = route; self.tier = tier; self.score = score
         self.headline = headline; self.info = info; self.imageURL = imageURL
-        self.source = source; self.response = response; self.action = action
+        self.source = source; self.sources = sources; self.response = response; self.action = action
         self.searchSuggestionHTML = searchSuggestionHTML
         self.pending = pending; self.timings = timings; self.latencyMs = latencyMs
         self.suppressed = suppressed; self.note = note
