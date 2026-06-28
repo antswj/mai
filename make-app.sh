@@ -20,9 +20,12 @@ MIN_OS="15.0"              # SCStreamConfiguration.captureMicrophone is macOS 15
 # PERSIST across rebuilds; ad-hoc grants reset every rebuild because the code hash
 # changes, which leaves a stale "on" entry in System Settings that no longer matches.
 # If SIGN_ID is unset, auto-use a self-signed code-signing cert named "Mai Dev" when
-# present, else fall back to ad-hoc.
+# present, else fall back to ad-hoc. Note: list identities WITHOUT `-v` here. A
+# self-signed root is untrusted (CSSMERR_TP_NOT_TRUSTED), so `-v` (valid only) hides
+# it; codesign still signs with it fine and the grant persists, which is the whole
+# point, so we match against the full identity list.
 if [ -z "${SIGN_ID:-}" ]; then
-    if security find-identity -v -p codesigning 2>/dev/null | grep -q "Mai Dev"; then
+    if security find-identity -p codesigning 2>/dev/null | grep -q "Mai Dev"; then
         SIGN_ID="Mai Dev"
     else
         SIGN_ID="-"

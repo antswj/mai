@@ -32,6 +32,13 @@ Evals/output/
 
 # Built app bundle (run ./make-app.sh locally; never committed)
 Mai.app/
+
+# Local code-signing artifacts (certificates and requests stay on the machine)
+*.cer
+*.certSigningRequest
+*.p12
+*.mobileprovision
+
 # Local capture caches and clips
 *.aiff
 *.wav
