@@ -23,12 +23,20 @@ struct MaiApp: App {
 
     var body: some Scene {
         WindowGroup("Mai") {
-            HStack(spacing: 0) {
-                SimulatedInputView(model: model)
+            VStack(spacing: 0) {
+                CaptureBarView(model: model)
                 Divider()
-                CardStreamView(model: model)
+                HStack(spacing: 0) {
+                    if model.useSimulated {
+                        SimulatedInputView(model: model)
+                        Divider()
+                    }
+                    LiveTranscriptView(model: model)
+                    Divider()
+                    CardStreamView(model: model)
+                }
             }
-            .frame(minWidth: 720, minHeight: 520)
+            .frame(minWidth: 980, minHeight: 580)
         }
     }
 }

@@ -25,6 +25,7 @@ let package = Package(
     ],
     products: [
         .library(name: "MaiCore", targets: ["MaiCore"]),
+        .library(name: "MaiCapture", targets: ["MaiCapture"]),
         .executable(name: "Mai", targets: ["MaiApp"]),
         .executable(name: "MaiSmoke", targets: ["MaiSmoke"]),
         .executable(name: "MaiTests", targets: ["MaiTests"]),
@@ -44,20 +45,27 @@ let package = Package(
                 .process("Prompts"),
             ]
         ),
-        .executableTarget(
-            name: "MaiApp",
+        // Real platform capture (macOS): ScreenCaptureKit audio + screen, Soniox
+        // streaming transcription, Gemini screen reads. Implements the MaiCore
+        // Ears/Eyes contracts. Kept separate so MaiCore stays portable.
+        .target(
+            name: "MaiCapture",
             dependencies: ["MaiCore"]
         ),
         .executableTarget(
+            name: "MaiApp",
+            dependencies: ["MaiCore", "MaiCapture"]
+        ),
+        .executableTarget(
             name: "MaiSmoke",
-            dependencies: ["MaiCore"]
+            dependencies: ["MaiCore", "MaiCapture"]
         ),
         // Deterministic acceptance harness over the public engine + stubs. Runs
         // everywhere, including with Command Line Tools only, where `swift test`
         // (swift-testing) cannot run because that framework ships with full Xcode.
         .executableTarget(
             name: "MaiTests",
-            dependencies: ["MaiCore"]
+            dependencies: ["MaiCore", "MaiCapture"]
         ),
         .testTarget(
             name: "MaiCoreTests",
