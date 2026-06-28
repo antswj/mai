@@ -17,11 +17,17 @@ final class StreamFace: Face, @unchecked Sendable {
     func renderSuppressed(_ card: Card, why: String) { cont.yield(.suppressed(card, why)) }
 }
 
-struct DisplayItem: Identifiable {
-    let id = UUID()
-    let card: Card
-    let suppressed: Bool
-    let why: String?
+// The Step-3 rich-card channel: the engine emits a skeleton then re-emits the same
+// card (by id) as each enrichment part lands. Carried over an AsyncStream so the
+// actor-isolated engine hands cards to the @MainActor model safely.
+final class StreamRichSink: RichCardSink, @unchecked Sendable {
+    private let cont: AsyncStream<RichCard>.Continuation
+    init(_ cont: AsyncStream<RichCard>.Continuation) { self.cont = cont }
+    func upsert(_ card: RichCard) { cont.yield(card) }
+    func suppressed(headline: String, trigger: TriggerType, reason: String) {
+        cont.yield(RichCard(trigger: trigger, timestamp: Date(), route: .pending, tier: .noise, score: 0,
+                            headline: headline, pending: [], suppressed: true, note: reason))
+    }
 }
 
 // Owns the engine and the capture session, and publishes the card stream and the
@@ -30,14 +36,15 @@ struct DisplayItem: Identifiable {
 // to simulated input so the app is still usable. A pause control tears capture down.
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var items: [DisplayItem] = []           // cards, newest first
+    @Published var richItems: [RichCard] = []          // rich cards, newest first
     @Published var liveLines: [LiveTranscriptLine] = [] // transcript, oldest first (last = active)
     @Published var captureState: CaptureState = .starting
     @Published var showSuppressed: Bool
     @Published var useSimulated: Bool
+    @Published var responseEnabled: Bool                // Part B toggle
     @Published var status: String = ""
 
-    let config: Config
+    private(set) var config: Config
     private let secrets: Secrets
     private let store: MemoryStore
     private let verbatim: VerbatimLog
@@ -50,6 +57,7 @@ final class AppModel: ObservableObject {
     private var simEyes: SimulatedEyes?
     private var runTask: Task<Void, Never>?
     private var faceTask: Task<Void, Never>?
+    private var richTask: Task<Void, Never>?
 
     let fixtures = ["meeting_ja_en.txt", "meeting_zh.txt", "casual.txt"]
 
@@ -60,6 +68,7 @@ final class AppModel: ObservableObject {
         self.store = (try? SQLiteStore(path: "data/mai.sqlite")) ?? StubStore()
         self.verbatim = VerbatimLog()
         self.showSuppressed = config.showSuppressedLog
+        self.responseEnabled = config.responseEnabled
         // Real capture needs Screen Recording + Microphone, which only a signed .app
         // bundle can hold. Running unbundled (swift run) has no bundle id, so default
         // to the simulated dev path there. Force simulated with MAI_SIMULATED=1.
@@ -74,21 +83,28 @@ final class AppModel: ObservableObject {
     private func startSession() {
         let (faceStream, cont) = AsyncStream<FaceEvent>.makeStream()
         let face = StreamFace(cont)
+        let (richStream, richCont) = AsyncStream<RichCard>.makeStream()
+        let richSink = StreamRichSink(richCont)
         let llm = MaiFactory.makeLLM(config: config, secrets: secrets)
         let places = MaiFactory.makePlaces(config: config, secrets: secrets)
         let location = MaiFactory.makeLocation(config: config)
+        let entity = MaiFactory.makeEntityLookup(config: config, secrets: secrets)
+        let grounded = MaiFactory.makeGroundedSearch(config: config, secrets: secrets)
         let engine = Engine(config: config, llm: llm, places: places, location: location,
-                            store: store, verbatim: verbatim, face: face)
+                            store: store, verbatim: verbatim, face: face,
+                            richSink: richSink, entity: entity, grounded: grounded)
         self.engine = engine
 
-        faceTask = Task { [weak self] in
-            for await ev in faceStream {
+        // The rich-card path (Step 3) drives the card UI. The Card/Face stream is kept
+        // for any non-rich fallback but is unused while lookup is enabled.
+        richTask = Task { [weak self] in
+            for await card in richStream {
                 guard let self else { continue }
-                switch ev {
-                case .surfaced(let card): self.items.insert(DisplayItem(card: card, suppressed: false, why: nil), at: 0)
-                case .suppressed(let card, let why): self.items.insert(DisplayItem(card: card, suppressed: true, why: why), at: 0)
-                }
+                self.upsertRich(card)
             }
+        }
+        faceTask = Task { [weak self] in
+            for await _ in faceStream { _ = self }   // drained; rich path is the UI
         }
 
         if useSimulated {
@@ -117,8 +133,32 @@ final class AppModel: ObservableObject {
     private func stopSession() {
         runTask?.cancel(); runTask = nil
         faceTask?.cancel(); faceTask = nil
+        richTask?.cancel(); richTask = nil
         realEars?.stop(); realEyes?.stop()
         simEars?.finish(); simEyes?.finish()
+    }
+
+    // Upsert a rich card by id: first emit inserts the skeleton (newest first), later
+    // emits update it in place as enrichment parts resolve.
+    private func upsertRich(_ card: RichCard) {
+        if let idx = richItems.firstIndex(where: { $0.id == card.id }) {
+            richItems[idx] = card
+        } else {
+            richItems.insert(card, at: 0)
+            if richItems.count > 200 { richItems.removeLast(richItems.count - 200) }
+        }
+    }
+
+    // Part B: flip the suggested-response toggle and rebuild the session so the
+    // enricher picks up the new setting. Cards already shown are kept.
+    func toggleResponse() {
+        responseEnabled.toggle()
+        config.responseEnabled = responseEnabled
+        let keepSimulated = useSimulated
+        stopSession()
+        useSimulated = keepSimulated
+        startSession()
+        status = responseEnabled ? "Suggested responses on." : "Suggested responses off."
     }
 
     private func startCapture() async {
@@ -255,9 +295,9 @@ final class AppModel: ObservableObject {
     func summarize() {
         Task {
             if let s = await engine.summarize() {
-                let card = Card(title: "Session summary", body: s, trigger: .question, tier: .medium,
-                                score: 1, timestamp: Date(), action: nil, latencyMs: nil)
-                self.items.insert(DisplayItem(card: card, suppressed: false, why: nil), at: 0)
+                let card = RichCard(trigger: .question, timestamp: Date(), route: .technical, tier: .medium,
+                                    score: 1, headline: "Session summary", info: s, pending: [])
+                self.upsertRich(card)
             }
         }
     }
