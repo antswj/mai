@@ -9,6 +9,7 @@ places = "merged"                 # "merged" (Google + Hot Pepper), "google", "h
 # Anthropic defaults (verified current 2026-06). Fast classifier, quality drafter.
 classifier = "claude-haiku-4-5"
 drafter    = "claude-sonnet-4-6"
+router     = "claude-haiku-4-5"    # fast lookup-route classifier (card brain); everything downstream waits on it
 screen     = "gemini-2.5-flash"   # Gemini vision model for screen reads (smoke test now, eyes later)
 # claude-opus-4-8 is available for heavy reasoning.
 # If providers.llm = "groq", use instead: classifier "openai/gpt-oss-20b", drafter "openai/gpt-oss-120b".
@@ -26,8 +27,21 @@ translation = false                 # enable if it helps produce info-language t
 model = "gemini-2.5-flash"          # Gemini Flash-family vision model for screen reads (verified 2026-06)
 
 [latency]
-target_seconds = 3
+target_seconds = 3              # local-only lookups (trivial, cached entity) aim to land within this
 hard_cap_seconds = 5
+online_cap_seconds = 5          # hard ceiling on any single online enrichment (network call) before it gives up
+
+[lookup]
+# The card brain: routes each surfaced trigger to trivial (local, no web/image),
+# entity (Wikipedia), fresh (Gemini grounded search), or technical. Card info is
+# always written in the interface language regardless of the spoken language.
+enabled = true
+
+[response]
+# The suggested-reply toggle. When on, a card may include a conservative suggested
+# response (in the spoken language, with furigana/pinyin and an interface-language
+# translation) when one is clearly warranted. Off by default.
+enabled = false
 
 [rolling_context]
 max_turns = 12
@@ -61,6 +75,18 @@ start_paused = false             # always-on by default; user can pause anytime
 [transcript]
 show_live = true                 # the always-on lyrics-style live transcript view
 ruby = true                      # furigana over kanji, pinyin over hanzi, as true ruby
+
+[vad]
+# On-device voice-activity gating so always-on capture only pays for transcription
+# while someone is actually speaking. Silero VAD v5 runs locally (no network); each
+# audio source is gated independently. Soniox bills for the full open-stream duration,
+# so on sustained silence Mai ends the stream and reopens it on the next speech onset.
+enabled = true
+engine = "silero_v5"              # on-device Silero VAD v5 (ONNX), fully local
+onset = 0.5                       # speech-probability threshold to open the gate (start a stream)
+offset = 0.35                     # probability below which audio counts as silence (hysteresis vs onset)
+silence_hangover_seconds = 4      # sustained silence before tearing the stream down (avoids flapping on pauses)
+preroll_seconds = 1.0             # pre-onset audio kept in a ring buffer and flushed so the first word is not clipped
 
 [location]
 test_lat = 35.7016                # public Funabashi Station area, NOT a home address

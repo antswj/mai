@@ -43,6 +43,11 @@ public actor Engine {
     private let cardize: Cardize
     private let surfacing: Surfacing
 
+    // Step-3 rich path. Present only when a RichCardSink is supplied (the app); when
+    // nil the engine keeps the step-1 Card/Face path unchanged (console + tests).
+    private let richSink: RichCardSink?
+    private let richEnricher: RichCardEnricher?
+
     private var context: RollingContext
     private let session: SessionInfo
 
@@ -60,6 +65,9 @@ public actor Engine {
         store: MemoryStore,
         verbatim: VerbatimLog,
         face: Face,
+        richSink: RichCardSink? = nil,
+        entity: EntityLookup? = nil,
+        grounded: GroundedSearch? = nil,
         sessionId: String = UUID().uuidString,
         startedAt: Date = Date()
     ) {
@@ -67,6 +75,7 @@ public actor Engine {
         self.store = store
         self.verbatim = verbatim
         self.face = face
+        self.richSink = richSink
         self.context = RollingContext(maxTurns: config.maxTurns, maxSeconds: config.maxSeconds)
         self.classifier = Classifier(llm: llm, model: config.classifierModel,
                                      enabled: config.enabledTriggers,
@@ -80,6 +89,15 @@ public actor Engine {
                                meetingMode: config.meetingMode,
                                furigana: config.furigana, pinyin: config.pinyin)
         self.surfacing = Surfacing(threshold: config.threshold)
+        if let richSink, config.lookupEnabled {
+            self.richEnricher = RichCardEnricher(
+                config: config, llm: llm,
+                entity: entity ?? StubEntityLookup(),
+                grounded: grounded ?? StubGroundedSearch(),
+                places: places, location: location, sink: richSink)
+        } else {
+            self.richEnricher = nil
+        }
         self.session = SessionInfo(id: sessionId, startedAt: startedAt, endedAt: nil,
                                    interfaceLanguage: config.interfaceLanguage.rawValue,
                                    floorLanguage: config.floorLanguage.rawValue,
@@ -118,6 +136,92 @@ public actor Engine {
     }
 
     private func handle(_ trigger: Trigger, event: TranscriptEvent, t0: Date) async {
+        if let enricher = richEnricher {
+            handleRich(trigger, event: event, t0: t0, enricher: enricher)
+        } else {
+            await handleCard(trigger, event: event, t0: t0)
+        }
+    }
+
+    // MARK: - Rich path (Step 3): instant skeleton, async enrichment, no lag
+
+    private func handleRich(_ trigger: Trigger, event: TranscriptEvent, t0: Date, enricher: RichCardEnricher) {
+        let topic = (trigger.payload["query"] ?? trigger.span).trimmingCharacters(in: .whitespacesAndNewlines)
+        let headline = headline(for: trigger, topic: topic)
+        let pre = surfacing.preEvaluate(trigger: trigger, headline: headline, now: event.timestamp)
+        guard pre.surface else {
+            if config.showSuppressedLog { richSink?.suppressed(headline: headline, trigger: trigger.type, reason: pre.reason) }
+            return
+        }
+        let latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+
+        // screenReference is already captured: build and persist the card instantly,
+        // no enrichment task needed.
+        if trigger.type == .screenReference {
+            var card = RichCard(trigger: .screenReference, timestamp: event.timestamp, route: .screen,
+                                tier: pre.tier, score: pre.score, headline: headline,
+                                info: currentScreenText.trimmingCharacters(in: .whitespacesAndNewlines),
+                                latencyMs: latencyMs)
+            card.pending = []
+            richSink?.upsert(card)
+            persistRich(card)
+            return
+        }
+
+        let spoken = ScriptDetect.language(of: topic.isEmpty ? context.window() : topic)
+        let (route, request, pending): (LookupRoute, LookupRequest, Set<String>)
+        switch trigger.type {
+        case .place:
+            route = .place
+            request = .place(query: topic.isEmpty ? "restaurant" : topic)
+            pending = [RichCard.Part.info.rawValue]
+        case .reference:
+            route = .preparedReply
+            request = .preparedReply(context: context.window(), asker: trigger.payload["speaker"], spoken: config.floorLanguage)
+            pending = [RichCard.Part.response.rawValue]
+        case .question, .intent:
+            route = .pending
+            request = .knowledge(topic: topic.isEmpty ? trigger.span : topic, window: context.window(),
+                                 spoken: spoken, respond: config.responseEnabled)
+            pending = [RichCard.Part.route.rawValue]
+        case .screenReference:
+            return // handled above
+        }
+
+        let skeleton = RichCard(trigger: trigger.type, timestamp: event.timestamp, route: route,
+                                tier: pre.tier, score: pre.score, headline: headline,
+                                pending: pending, latencyMs: latencyMs)
+        richSink?.upsert(skeleton)   // instant first paint, before any lookup
+
+        let key = "\(trigger.type.rawValue)|\(headline.lowercased())"
+        Task { [weak self] in
+            guard let self else { return }
+            await enricher.submit(skeleton, request: request, supersedeKey: key) { final in
+                Task { await self.persistRich(final) }
+            }
+        }
+    }
+
+    private func headline(for trigger: Trigger, topic: String) -> String {
+        switch trigger.type {
+        case .place: return "Nearby: \(topic.isEmpty ? "places" : topic)"
+        case .reference: return "Suggested reply"
+        case .screenReference: return "On screen"
+        case .question, .intent: return topic.isEmpty ? trigger.span : topic
+        }
+    }
+
+    private func persistRich(_ card: RichCard) {
+        let c = card.toCard()
+        save(record(kind: "card", content: cardSummaryLine(c), language: config.interfaceLanguage.rawValue,
+                    speaker: nil, at: c.timestamp, meta: cardMeta(c)))
+        save(record(kind: "note", content: "Surfaced \(c.tier.rawValue) \(c.trigger.rawValue) card: \(c.title)",
+                    language: config.interfaceLanguage.rawValue, speaker: nil, at: c.timestamp))
+    }
+
+    // MARK: - Card path (Step 1/2): unchanged
+
+    private func handleCard(_ trigger: Trigger, event: TranscriptEvent, t0: Date) async {
         // screenReference surfaces the current stored screen read; the screen is
         // already captured continuously, the verbal cue only prioritizes it.
         let (result, _) = await dispatcher.dispatch(

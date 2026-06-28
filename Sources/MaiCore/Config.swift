@@ -41,6 +41,18 @@ public struct Config: Sendable {
     public var startPaused: Bool
     public var showLiveTranscript: Bool
     public var ruby: Bool
+    // Step 3: card intelligence (lookup router), the response toggle, latency caps,
+    // and on-device voice-activity gating.
+    public var lookupEnabled: Bool
+    public var lookupRouterModel: String
+    public var responseEnabled: Bool
+    public var onlineCapSeconds: Double
+    public var vadEnabled: Bool
+    public var vadEngine: String
+    public var vadSilenceHangoverSeconds: Double
+    public var vadPrerollSeconds: Double
+    public var vadOnset: Double
+    public var vadOffset: Double
 
     public init(
         llmProvider: String = "anthropic",
@@ -76,7 +88,17 @@ public struct Config: Sendable {
         captureSource: String = "main_display",
         startPaused: Bool = false,
         showLiveTranscript: Bool = true,
-        ruby: Bool = true
+        ruby: Bool = true,
+        lookupEnabled: Bool = true,
+        lookupRouterModel: String = "claude-haiku-4-5",
+        responseEnabled: Bool = false,
+        onlineCapSeconds: Double = 5,
+        vadEnabled: Bool = true,
+        vadEngine: String = "silero_v5",
+        vadSilenceHangoverSeconds: Double = 4,
+        vadPrerollSeconds: Double = 1.0,
+        vadOnset: Double = 0.5,
+        vadOffset: Double = 0.35
     ) {
         self.llmProvider = llmProvider; self.placesProvider = placesProvider
         self.classifierModel = classifierModel; self.drafterModel = drafterModel; self.screenModel = screenModel
@@ -93,6 +115,11 @@ public struct Config: Sendable {
         self.screenSettleSeconds = screenSettleSeconds; self.screenFrameIntervalSeconds = screenFrameIntervalSeconds
         self.captureSource = captureSource; self.startPaused = startPaused
         self.showLiveTranscript = showLiveTranscript; self.ruby = ruby
+        self.lookupEnabled = lookupEnabled; self.lookupRouterModel = lookupRouterModel
+        self.responseEnabled = responseEnabled; self.onlineCapSeconds = onlineCapSeconds
+        self.vadEnabled = vadEnabled; self.vadEngine = vadEngine
+        self.vadSilenceHangoverSeconds = vadSilenceHangoverSeconds; self.vadPrerollSeconds = vadPrerollSeconds
+        self.vadOnset = vadOnset; self.vadOffset = vadOffset
     }
 
     /// Load from a config.toml. Missing file or missing keys fall back to defaults.
@@ -141,6 +168,18 @@ public struct Config: Sendable {
         if let v = bln("capture", "start_paused") { c.startPaused = v }
         if let v = bln("transcript", "show_live") { c.showLiveTranscript = v }
         if let v = bln("transcript", "ruby") { c.ruby = v }
+        // Step 3 sections.
+        if let v = bln("lookup", "enabled") { c.lookupEnabled = v }
+        if let v = str("lookup", "router_model") { c.lookupRouterModel = v }
+        if let v = str("models", "router") { c.lookupRouterModel = v }
+        if let v = bln("response", "enabled") { c.responseEnabled = v }
+        if let v = dbl("latency", "online_cap_seconds") { c.onlineCapSeconds = v }
+        if let v = bln("vad", "enabled") { c.vadEnabled = v }
+        if let v = str("vad", "engine") { c.vadEngine = v }
+        if let v = dbl("vad", "silence_hangover_seconds") { c.vadSilenceHangoverSeconds = v }
+        if let v = dbl("vad", "preroll_seconds") { c.vadPrerollSeconds = v }
+        if let v = dbl("vad", "onset") { c.vadOnset = v }
+        if let v = dbl("vad", "offset") { c.vadOffset = v }
         return c
     }
 }

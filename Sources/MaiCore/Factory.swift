@@ -36,4 +36,18 @@ public enum MaiFactory {
         guard let key = secrets.get("GEMINI_API_KEY") else { return nil }
         return GeminiVision(apiKey: key, model: config.screenModel)
     }
+
+    // Entity lookups resolve cross-language to the interface article; the LLM (when
+    // available) handles the native-summary translation fallback.
+    public static func makeEntityLookup(config: Config, secrets: Secrets) -> EntityLookup {
+        let llm = secrets.get("ANTHROPIC_API_KEY").map { AnthropicLLM(apiKey: $0) }
+        return WikipediaLookup(llm: llm, translateModel: config.lookupRouterModel)
+    }
+
+    // Grounded web search for the fresh/technical routes. Falls back to the stub when
+    // no Gemini key is present so the app still runs and shows the shape.
+    public static func makeGroundedSearch(config: Config, secrets: Secrets) -> GroundedSearch {
+        guard let key = secrets.get("GEMINI_API_KEY") else { return StubGroundedSearch() }
+        return GeminiGroundedSearch(apiKey: key, model: config.screenModel)
+    }
 }

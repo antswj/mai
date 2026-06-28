@@ -57,7 +57,7 @@ public struct Place: Codable, Sendable {
     }
 }
 
-public struct Action: Codable, Sendable {
+public struct Action: Codable, Sendable, Equatable {
     public let kind: String
     public let label: String
     public let params: [String: String]

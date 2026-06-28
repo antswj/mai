@@ -22,7 +22,58 @@ public struct StubLLM: LLMProvider {
     static func defaultResponder(system: String, user: String, model: String) -> String {
         if system.contains("trigger classifier") { return classify(user) }
         if system.contains("Mai's drafter") { return draft(user) }
+        if system.contains("lookup router") { return route(user) }
+        if system.contains("Mai's explainer") { return explain(user) }
+        if system.contains("Mai's responder") { return respond(user) }
+        if system.lowercased().contains("translate") {
+            // Translation fallback (Wikipedia native-summary path): echo the input.
+            return user
+        }
         return "{}"
+    }
+
+    // MARK: - Step 3 routing / explanation / response stubs
+
+    private static func route(_ user: String) -> String {
+        let topicRaw = valueAfter("What the user wondered about:", in: user) ?? ""
+        let topic = topicRaw.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+        let low = topic.lowercased()
+        func has(_ needles: [String]) -> Bool { needles.contains { low.contains($0.lowercased()) || topic.contains($0) } }
+        // Fresh: time-sensitive cues.
+        if has(["latest", "news", "today", "weather", "price", "stock", "score", "who won", "現在", "最新", "ニュース", "天気", "今天", "最新", "新闻", "天气"]) {
+            return object(["route": "fresh", "entity": "", "query": topic, "needs_search": true, "needs_image": false])
+        }
+        // Entity: known things (incl. native-script variants).
+        if has(["malaysia", "マレーシア", "马来西亚", "馬來西亞", "sushi", "寿司", "お寿司", "壽司", "ada lovelace", "北京", "beijing"]) {
+            var entity = topic
+            if has(["sushi"]) { entity = "sushi" }
+            if has(["お寿司", "寿司"]) { entity = "寿司" }
+            if has(["malaysia"]) { entity = "Malaysia" }
+            return object(["route": "entity", "entity": entity, "query": topic, "needs_search": false, "needs_image": true])
+        }
+        // Default: technical, no live search needed.
+        return object(["route": "technical", "entity": "", "query": topic, "needs_search": false, "needs_image": false])
+    }
+
+    private static func explain(_ user: String) -> String {
+        let q = valueAfter("Question:", in: user) ?? "this"
+        return object(["answer": "In short: \(q) comes down to a few clear ideas, explained plainly here."])
+    }
+
+    private static func respond(_ user: String) -> String {
+        let spoken = valueAfter("Spoken language:", in: user) ?? "English"
+        if spoken.contains("Japanese") {
+            return object(["warranted": true, "spoken": "確認して、後ほどご連絡します。",
+                           "translation": "Let me check and get back to you shortly.",
+                           "rationale": "You were asked for input."])
+        } else if spoken.contains("Chinese") {
+            return object(["warranted": true, "spoken": "我确认一下，稍后回复您。",
+                           "translation": "Let me confirm and reply to you shortly.",
+                           "rationale": "You were asked for input."])
+        }
+        return object(["warranted": true, "spoken": "Let me check and get back to you shortly.",
+                       "translation": "Let me check and get back to you shortly.",
+                       "rationale": "You were asked for input."])
     }
 
     private static func classify(_ window: String) -> String {

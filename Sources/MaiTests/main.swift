@@ -375,6 +375,221 @@ do {
           "missing lists only screen recording")
 }
 
+// ============================ Step 3: card intelligence ============================
+
+final class CollectingRichSink: RichCardSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cards: [String: RichCard] = [:]
+    private var order: [String] = []
+    private(set) var upsertCount = 0
+    private(set) var suppressedList: [(String, TriggerType, String)] = []
+    func upsert(_ card: RichCard) {
+        lock.lock(); defer { lock.unlock() }
+        if cards[card.id] == nil { order.append(card.id) }
+        cards[card.id] = card; upsertCount += 1
+    }
+    func suppressed(headline: String, trigger: TriggerType, reason: String) {
+        lock.lock(); defer { lock.unlock() }
+        suppressedList.append((headline, trigger, reason))
+    }
+    var all: [RichCard] { lock.lock(); defer { lock.unlock() }; return order.compactMap { cards[$0] } }
+    var firstSkeletonPending: Bool { all.first.map { !$0.pending.isEmpty } ?? false }
+}
+
+func enrich(_ request: LookupRequest, config: Config = Config(),
+            entity: EntityLookup = StubEntityLookup(), grounded: GroundedSearch = StubGroundedSearch(),
+            trigger: TriggerType = .question) async -> (RichCard, CollectingRichSink) {
+    let sink = CollectingRichSink()
+    let enricher = RichCardEnricher(config: config, llm: StubLLM(), entity: entity, grounded: grounded,
+                                    places: StubPlaces(), location: FixedLocation(lat: config.testLat, lng: config.testLng), sink: sink)
+    let skeleton = RichCard(trigger: trigger, timestamp: Date(), route: .pending, headline: "test",
+                            pending: [RichCard.Part.route.rawValue])
+    let final: RichCard = await withCheckedContinuation { cont in
+        Task { await enricher.submit(skeleton, request: request, supersedeKey: "k") { c in cont.resume(returning: c) } }
+    }
+    return (final, sink)
+}
+
+func waitResolved(_ sink: CollectingRichSink, timeoutMs: Int = 4000) async -> RichCard? {
+    for _ in 0..<(timeoutMs / 10) {
+        if let c = sink.all.first(where: { $0.pending.isEmpty }) { return c }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return sink.all.first(where: { $0.pending.isEmpty }) ?? sink.all.first
+}
+
+struct RichRig { let engine: Engine; let sink: CollectingRichSink; let store: SQLiteStore }
+func makeRichRig(_ config: Config = Config(), entity: EntityLookup = StubEntityLookup(),
+                 grounded: GroundedSearch = StubGroundedSearch(), places: PlacesProvider = StubPlaces()) -> RichRig {
+    let dir = tempDir()
+    let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
+    let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
+    let sink = CollectingRichSink()
+    let engine = Engine(config: config, llm: StubLLM(), places: places,
+                        location: FixedLocation(lat: config.testLat, lng: config.testLng),
+                        store: store, verbatim: verbatim, face: ConsoleFace(),
+                        richSink: sink, entity: entity, grounded: grounded)
+    return RichRig(engine: engine, sink: sink, store: store)
+}
+
+section("Trivial answers: local, exact, conservative")
+do {
+    check(TrivialAnswer.answer("what's 15% of 80") == "12", "15% of 80 = 12")
+    check(TrivialAnswer.answer("20 percent of 50") == "10", "20 percent of 50 = 10")
+    check(TrivialAnswer.answer("12 * 7") == "84", "12 * 7 = 84")
+    check(TrivialAnswer.answer("100 divided by 4") == "25", "100 divided by 4 = 25")
+    check(TrivialAnswer.answer("(2 + 3) * 4") == "20", "parentheses honored")
+    check(TrivialAnswer.answer("how many ml in a cup") == "236.59 ml", "cup -> ml exact")
+    check(TrivialAnswer.answer("convert 5 km to miles")?.hasPrefix("3.11") == true, "5 km -> ~3.11 miles")
+    check(TrivialAnswer.answer("100 c to f") == "212°F", "100C -> 212F")
+    check(TrivialAnswer.answer("who is the president") == nil, "non-numeric question is not trivial")
+    check(TrivialAnswer.answer("the weather today") == nil, "freshness question is not trivial")
+}
+
+section("Router: route selection + multilingual entity extraction")
+do {
+    let router = LookupRouter(llm: StubLLM(), model: "claude-haiku-4-5", interface: .en)
+    let trivial = await router.plan(topic: "what's 15% of 80", window: "", spoken: .en)
+    check(trivial.route == .trivial && trivial.trivialAnswer == "12", "trivial decided locally, no model")
+    let entity = await router.plan(topic: "Malaysia", window: "", spoken: .en)
+    check(entity.route == .entity && entity.needsImage, "known place routes to entity with image")
+    let entityJa = await router.plan(topic: "お寿司", window: "", spoken: .ja)
+    check(entityJa.route == .entity && entityJa.entity == "寿司", "Japanese entity kept in native script")
+    let entityZh = await router.plan(topic: "马来西亚", window: "", spoken: .zh)
+    check(entityZh.route == .entity, "Chinese entity routes to entity")
+    let fresh = await router.plan(topic: "latest news on the election", window: "", spoken: .en)
+    check(fresh.route == .fresh && fresh.needsSearch, "freshness routes to grounded search")
+    let tech = await router.plan(topic: "how does a hash map work", window: "", spoken: .en)
+    check(tech.route == .technical, "how/why routes to technical")
+}
+
+section("Enrichment: entity route (Wikipedia summary + image + source), interface language")
+do {
+    let (card, sink) = await enrich(.knowledge(topic: "Malaysia", window: "going to Malaysia", spoken: .en, respond: false))
+    check(card.route == .entity, "route is entity")
+    check(card.info?.contains("Southeast Asia") == true, "info is the interface-language summary")
+    check(card.imageURL != nil, "image URL present from the lookup")
+    check(card.source?.url.contains("wikipedia.org") == true, "real Wikipedia source")
+    check(card.pending.isEmpty, "all parts resolved to a terminal state")
+    check(sink.upsertCount >= 2, "skeleton then enriched: more than one emit")
+}
+
+section("Enrichment: cross-language entity (native script -> interface-language card)")
+do {
+    let (cardJa, _) = await enrich(.knowledge(topic: "お寿司", window: "お寿司が食べたい", spoken: .ja, respond: false), config: Config(interfaceLanguage: .en))
+    check(cardJa.route == .entity, "Japanese entity routes to entity")
+    check(cardJa.info?.contains("Japanese dish") == true, "summary resolved into the interface language (English)")
+    check(cardJa.source?.url.contains("/Sushi") == true, "resolved to the English article")
+    let (cardZh, _) = await enrich(.knowledge(topic: "马来西亚", window: "我要去马来西亚", spoken: .zh, respond: false), config: Config(interfaceLanguage: .en))
+    check(cardZh.info?.contains("Southeast Asia") == true, "Chinese entity also resolves to an English summary")
+}
+
+section("Enrichment: fresh route (grounded, sourced, no image)")
+do {
+    let (card, _) = await enrich(.knowledge(topic: "latest news on the mission", window: "", spoken: .en, respond: false))
+    check(card.route == .fresh, "route is fresh")
+    check(card.info?.isEmpty == false, "synthesized answer present")
+    check(card.source != nil, "grounded source present")
+    check(card.imageURL == nil, "grounded cards carry no image (never fabricated)")
+}
+
+section("Enrichment: technical route (plain analysis, no web, no source)")
+do {
+    let (card, _) = await enrich(.knowledge(topic: "how does a hash map work", window: "", spoken: .en, respond: false))
+    check(card.route == .technical, "route is technical")
+    check(card.info?.isEmpty == false, "explanation present")
+    check(card.source == nil && card.imageURL == nil, "no source or image for a no-search technical answer")
+}
+
+section("Enrichment: trivial route (instant local answer, no image/source)")
+do {
+    let (card, _) = await enrich(.knowledge(topic: "what's 15% of 80", window: "", spoken: .en, respond: false))
+    check(card.route == .trivial, "route is trivial")
+    check(card.info == "12", "local exact answer")
+    check(card.source == nil && card.imageURL == nil, "trivial cards have no source or image")
+}
+
+section("Enrichment: never fabricate (nothing found resolves honestly)")
+do {
+    let emptyEntity = StubEntityLookup { _, _, _ in nil }
+    let emptyGrounded = StubGroundedSearch { _, _ in GroundedResult(answer: "", sources: [], searchSuggestionHTML: nil) }
+    // "latest ..." routes to fresh (grounded); the empty grounded stub returns nothing.
+    let (card, _) = await enrich(.knowledge(topic: "latest news on Zzxqq Unknownthing", window: "", spoken: .en, respond: false),
+                                 entity: emptyEntity, grounded: emptyGrounded)
+    check(card.route == .fresh, "freshness route taken")
+    check(card.pending.isEmpty, "card still resolves to a terminal state")
+    check(card.info?.lowercased().contains("could not find") == true, "says it found nothing rather than inventing")
+    check(card.source == nil && card.imageURL == nil, "no fabricated source or image")
+}
+
+section("Async enrichment: instant skeleton, transcript never blocked")
+do {
+    let sink = CollectingRichSink()
+    let enricher = RichCardEnricher(config: Config(), llm: StubLLM(), entity: StubEntityLookup(),
+                                    grounded: StubGroundedSearch(), places: StubPlaces(),
+                                    location: FixedLocation(lat: 0, lng: 0), sink: sink)
+    let skeleton = RichCard(trigger: .question, timestamp: Date(), route: .pending, headline: "Malaysia",
+                            pending: [RichCard.Part.route.rawValue], latencyMs: 3)
+    await enricher.submit(skeleton, request: .knowledge(topic: "Malaysia", window: "", spoken: .en, respond: false),
+                          supersedeKey: "k", onComplete: { _ in })
+    // The skeleton was emitted synchronously on submit's first hop; the first card
+    // observed is a loading skeleton, and it later resolves.
+    let resolved = await waitResolved(sink)
+    check(sink.all.first?.latencyMs == 3, "skeleton carries the time-to-first-paint latency")
+    check(resolved?.pending.isEmpty == true, "card eventually fully resolves")
+    check((resolved?.timings["route"] ?? -1) >= 0, "per-part route timing recorded")
+}
+
+section("Response toggle (Part B): off by default, on when enabled, in the spoken language")
+do {
+    let (off, _) = await enrich(.knowledge(topic: "Malaysia", window: "going to Malaysia", spoken: .en, respond: false))
+    check(off.response == nil, "no suggested response when the toggle is off")
+
+    let (onJa, _) = await enrich(.knowledge(topic: "意見", window: "ご意見をお願いできますか", spoken: .ja, respond: true))
+    check(onJa.response != nil, "suggested response present when the toggle is on")
+    check(onJa.response?.language == .ja, "response language follows the spoken language")
+    if let spoken = onJa.response?.spoken {
+        let units = Readings.units(spoken, language: .ja)
+        check(units.contains { ($0.reading ?? "").contains("かく") }, "furigana available over the response kanji")
+    } else { check(false, "response text present") }
+    check(onJa.response?.translation.isEmpty == false, "interface-language translation present")
+}
+
+section("Prepared reply via rich path (reference -> response with reading aids)")
+do {
+    let (card, _) = await enrich(.preparedReply(context: "Sato: ご意見をお願いできますか？", asker: "Sato", spoken: .ja),
+                                 config: Config(floorLanguage: .ja), trigger: .reference)
+    check(card.route == .preparedReply, "route is preparedReply")
+    check(card.response?.spoken.contains("確認") == true, "floor-language line present")
+    check(card.response?.translation.contains("get back") == true || card.response?.translation.isEmpty == false, "translation present")
+}
+
+section("Rich engine integration: Malaysia intent surfaces an entity card + memory")
+do {
+    let rig = makeRichRig()
+    await rig.engine.process(tline("i'm going to Malaysia next month", "Jon"))
+    let card = await waitResolved(rig.sink)
+    check(card?.trigger == .intent, "trigger is intent")
+    check(card?.route == .entity, "routed to entity")
+    check(card?.info?.contains("Southeast Asia") == true, "entity summary surfaced")
+    check(card?.source?.url.contains("wikipedia.org") == true, "real source")
+    await rig.engine.endSession()
+    let data = try! await rig.engine.exportSession()
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let kinds = ((obj?["records"] as? [[String: Any]]) ?? []).compactMap { $0["kind"] as? String }
+    check(kinds.contains("card") && kinds.contains("note"), "rich card mapped down to memory (card + note)")
+}
+
+section("Rich engine: supersede cancels prior enrichment on the same topic")
+do {
+    let rig = makeRichRig()
+    await rig.engine.process(tline("i'm going to Malaysia next month", "Jon"))
+    await rig.engine.process(tline("actually going to Malaysia for sure", "Jon"))
+    let card = await waitResolved(rig.sink)
+    check(card != nil, "a card still resolves after a supersede")
+    check(rig.sink.all.allSatisfy { $0.pending.isEmpty || $0.id != card?.id }, "no card left stuck mid-enrichment")
+}
+
 // Summary
 print("\n========================================")
 if failures.isEmpty {

@@ -21,4 +21,7 @@ public enum Prompts {
 
     public static var classifier: String { load("classifier") }
     public static var drafter: String { load("drafter") }
+    public static var router: String { load("router") }
+    public static var explainer: String { load("explainer") }
+    public static var responder: String { load("responder") }
 }
