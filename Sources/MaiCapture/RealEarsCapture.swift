@@ -31,8 +31,8 @@ extension RealEars {
         // VAD is off or the model fails to load, fall back to keeping both streams open.
         if cfg.vadEnabled, let micVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate),
            let systemVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate) {
-            setGates(mic: VadGatedSource(client: mic, vad: micVad, config: cfg, onSent: { [weak self] in self?.noteSent() }),
-                     system: VadGatedSource(client: system, vad: systemVad, config: cfg, onSent: { [weak self] in self?.noteSent() }))
+            setGates(mic: VadGatedSource(client: mic, vad: micVad, config: cfg, onSent: { [weak self] bytes in self?.noteSent(); self?.recordSentBytes(bytes) }),
+                     system: VadGatedSource(client: system, vad: systemVad, config: cfg, onSent: { [weak self] bytes in self?.noteSent(); self?.recordSentBytes(bytes) }))
         } else {
             setGates(mic: nil, system: nil)
             mic.connect()

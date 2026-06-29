@@ -14,7 +14,7 @@ import MaiCore
 final class VadGatedSource: @unchecked Sendable {
     private let client: SonioxClient
     private let vad: SileroVAD
-    private let onSent: @Sendable () -> Void
+    private let onSent: @Sendable (Int) -> Void   // bytes actually forwarded to Soniox
     private let lock = NSLock()
     private var gate: VadGate
     private var accumulator: FrameAccumulator
@@ -26,7 +26,7 @@ final class VadGatedSource: @unchecked Sendable {
     private var gatingDisabled = false
     private static let errorBudget = 20   // ~0.6s of failed inference before giving up gating
 
-    init(client: SonioxClient, vad: SileroVAD, config: Config, onSent: @escaping @Sendable () -> Void = {}) {
+    init(client: SonioxClient, vad: SileroVAD, config: Config, onSent: @escaping @Sendable (Int) -> Void = { _ in }) {
         self.client = client
         self.vad = vad
         self.onSent = onSent
@@ -45,7 +45,7 @@ final class VadGatedSource: @unchecked Sendable {
         lock.withLock {
             // Fail-open: a broken VAD streams everything rather than starving STT.
             if gatingDisabled {
-                client.sendAudio(pcm16); onSent()
+                client.sendAudio(pcm16); onSent(pcm16.count)
                 return
             }
             preroll.append(pcm16)
@@ -61,7 +61,7 @@ final class VadGatedSource: @unchecked Sendable {
                         gatingDisabled = true
                         streaming = true
                         client.connect()
-                        client.sendAudio(preroll.drain()); onSent()
+                        let pre = preroll.drain(); client.sendAudio(pre); onSent(pre.count)
                         return                                       // stream everything from now on
                     }
                     probability = gate.isOpen ? 1.0 : 0.0           // hold state on a transient error
@@ -70,7 +70,7 @@ final class VadGatedSource: @unchecked Sendable {
                 case .open:
                     streaming = true; justOpened = true
                     client.connect()
-                    client.sendAudio(preroll.drain()); onSent()     // flush pre-roll + reconnect audio
+                    let pre = preroll.drain(); client.sendAudio(pre); onSent(pre.count)   // flush pre-roll + reconnect audio
                 case .close:
                     streaming = false
                     client.finalize()
@@ -81,7 +81,7 @@ final class VadGatedSource: @unchecked Sendable {
             }
             // Stream live only when already open; the opening chunk was just flushed.
             if streaming && gate.isOpen && !justOpened {
-                client.sendAudio(pcm16); onSent()
+                client.sendAudio(pcm16); onSent(pcm16.count)
             }
         }
     }
