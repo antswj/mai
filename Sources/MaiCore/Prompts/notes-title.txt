@@ -1,0 +1,3 @@
+Generate a concise, specific meeting title from the notes and transcript, about 4 to 8 words, in title case, in the interface language. No date, no surrounding quotes.
+
+Output ONLY this JSON object: { "title": "..." }

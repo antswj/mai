@@ -36,12 +36,20 @@ let package = Package(
         // ONNX Runtime for on-device Silero VAD v5 (confirmed v1.24.2, 2026-06).
         // Fully local inference; the binary is fetched once at resolve time.
         .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.24.2"),
+        // Pure-Swift zip (MIT, v0.9.20, confirmed 2026-06-29) for writing .docx
+        // meeting notes (a .docx is a zip of OOXML parts). Foundation-only, no UI.
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.20"),
+        // User-customizable global keyboard shortcut for the HUD summon hotkey
+        // (MIT, v3.0.1, confirmed 2026-06-29). Uses Carbon hotkey registration, so
+        // no Accessibility permission and no special entitlement.
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "3.0.1"),
     ],
     targets: [
         .target(
             name: "MaiCore",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             resources: [
                 // Prompt templates shared by the engine and the evals.
@@ -65,7 +73,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "MaiApp",
-            dependencies: ["MaiCore", "MaiCapture"]
+            dependencies: [
+                "MaiCore", "MaiCapture",
+                .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+            ]
         ),
         .executableTarget(
             name: "MaiSmoke",

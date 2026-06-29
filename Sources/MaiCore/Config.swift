@@ -188,6 +188,7 @@ public struct Config: Sendable {
 // a fallback. Never logged, never written anywhere.
 public struct Secrets: Sendable {
     private let values: [String: String]
+    private let useKeychain: Bool
     public init(path: String = ".env") {
         var v: [String: String] = [:]
         if let text = try? String(contentsOfFile: path, encoding: .utf8) {
@@ -204,13 +205,20 @@ public struct Secrets: Sendable {
             }
         }
         self.values = v
+        self.useKeychain = true
     }
-    public init(values: [String: String]) { self.values = values }
+    public init(values: [String: String]) { self.values = values; self.useKeychain = false }
+    // Resolution order: a dev .env / process env first (so local runs keep working),
+    // then the Keychain (the shipped app stores user-entered keys there via Settings).
     public func get(_ key: String) -> String? {
         if let v = values[key], !v.isEmpty { return v }
         if let e = ProcessInfo.processInfo.environment[key], !e.isEmpty { return e }
+        if useKeychain, let k = try? Keychain.read(account: key), !k.isEmpty { return k }
         return nil
     }
+    /// The standard key names Mai uses, for the onboarding/settings key entry screen.
+    public static let knownKeys = ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "SONIOX_API_KEY",
+                                   "GOOGLE_PLACES_API_KEY", "HOTPEPPER_API_KEY", "GROQ_API_KEY"]
 }
 
 // Minimal TOML subset parser. Handles enough for config.toml.

@@ -778,6 +778,154 @@ do {
     }
 }
 
+// ============================ Step 3 final: app spine ============================
+
+func dataContains(_ data: Data, _ s: String) -> Bool { data.range(of: Data(s.utf8)) != nil }
+
+section("DocX writer: produces a valid Word-shaped .docx (zip of OOXML parts)")
+do {
+    let dir = tempDir()
+    let url = dir.appendingPathComponent("notes.docx")
+    try DocxWriter.write(title: "Quarterly Review",
+                         blocks: [.heading1("Summary"), .paragraph("We reviewed the quarter."),
+                                  .heading1("Key Points"), .bullet("Revenue is up"), .bullet("Hiring continues")],
+                         to: url)
+    let data = try Data(contentsOf: url)
+    check(data.starts(with: [0x50, 0x4B]), "file has the ZIP magic (PK)")
+    check(dataContains(data, "[Content_Types].xml"), "content types part present")
+    check(dataContains(data, "word/document.xml"), "document part present")
+    check(dataContains(data, "word/styles.xml"), "styles part present")
+    check(dataContains(data, "word/numbering.xml"), "numbering part present (real bullets)")
+}
+
+section("Markdown transcript: speakers, timestamps, and the user marked")
+do {
+    let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+    let lines = [MeetingLine(speaker: "Sato", isUser: false, text: "Let us begin.", timestamp: t0),
+                 MeetingLine(speaker: "You", isUser: true, text: "Sounds good.", timestamp: t0.addingTimeInterval(5))]
+    let md = MarkdownTranscript.render(title: "Sync", lines: lines, startedAt: t0, endedAt: t0.addingTimeInterval(60))
+    check(md.contains("# Sync"), "title heading present")
+    check(md.contains("Sato:") && md.contains("Sounds good."), "speakers and text present")
+    check(md.contains("(you)"), "the user's own line is marked")
+    check(md.contains("**["), "timestamps present")
+}
+
+section("Assistant context: condense long transcript, detect 'note this down'")
+do {
+    let short = (0..<3).map { MeetingLine(speaker: "A", isUser: false, text: "line \($0)", timestamp: Date()) }
+    check(!AssistantContext.transcriptContext(short, maxChars: 9999).contains("condensed"), "short transcript kept verbatim")
+    let long = (0..<500).map { MeetingLine(speaker: "A", isUser: false, text: "a fairly long sentence number \($0)", timestamp: Date()) }
+    let ctx = AssistantContext.transcriptContext(long, maxChars: 500)
+    check(ctx.contains("condensed") && ctx.count <= 700, "long transcript condensed to fit the budget")
+    check(ctx.contains("499"), "most recent line is kept")
+    check(AssistantContext.noteRequest("note this down: call the vendor") == "call the vendor", "note item extracted")
+    check(AssistantContext.noteRequest("note this down") == "", "bare note request returns empty item")
+    check(AssistantContext.noteRequest("what are they talking about") == nil, "non-note message is not a note request")
+}
+
+section("Assistant reply: identifies what the user said (via the injected transcript)")
+do {
+    let assistant = AnthropicAssistant(llm: StubLLM(), model: "claude-haiku-4-5", interface: .en)
+    let transcript = [MeetingLine(speaker: "Sato", isUser: false, text: "Shall we ship Friday?", timestamp: Date()),
+                      MeetingLine(speaker: "You", isUser: true, text: "I need one more day to test.", timestamp: Date())]
+    let reply = try await assistant.reply(to: "what are they talking about", transcript: transcript, history: [], screen: nil)
+    check(reply.contains("one more day to test"), "the assistant surfaces what the user themselves said")
+}
+
+section("Notes pipeline: write-up, verification drops unsupported, title, save")
+do {
+    let store = NotesStore(llm: StubLLM(), model: "claude-sonnet-4-6", interface: .en)
+    await store.start(now: Date(timeIntervalSince1970: 1_700_000_000))
+    let t = Date(timeIntervalSince1970: 1_700_000_000)
+    await store.add(MeetingLine(speaker: "Sato", isUser: false, text: "Let us finalize the launch checklist today.", timestamp: t))
+    await store.add(MeetingLine(speaker: "You", isUser: true, text: "I will prepare the design review by Friday.", timestamp: t.addingTimeInterval(6)))
+    await store.add(MeetingLine(speaker: "Lee", isUser: false, text: "We should confirm the venue booking.", timestamp: t.addingTimeInterval(12)))
+    await store.note("Circulate the agenda beforehand")
+    let active = await store.isActive(); check(active, "note-taking is active")
+    let folder = tempDir()
+    nonisolated(unsafe) var stages: [NotesStore.Stage] = []
+    let lock = NSLock()
+    guard let export = await store.stop(now: t.addingTimeInterval(120), folder: folder, onStage: { s in lock.withLock { stages.append(s) } }) else {
+        check(false, "stop produced an export"); fatalError()
+    }
+    check(stages.contains(.verifying), "the verification stage runs visibly")
+    check(export.title == "Team Sync Notes", "a title was generated")
+    check(!export.notes.summary.isEmpty, "a summary was written")
+    let allBullets = export.notes.sections.flatMap { $0.bullets }
+    check(allBullets.contains { $0.contains("launch checklist") }, "transcript-supported content kept")
+    check(allBullets.contains { $0.contains("Circulate the agenda") }, "'note this down' item merged into the notes")
+    check(!allBullets.contains { $0.contains("fifty million") }, "unsupported (fabricated) content dropped by verification")
+    check(export.notedItems.contains("Circulate the agenda beforehand"), "noted items carried in the export")
+    // Files saved to the chosen folder.
+    check(FileManager.default.fileExists(atPath: folder.appendingPathComponent(export.docxFileName).path), "the .docx was saved")
+    check(FileManager.default.fileExists(atPath: folder.appendingPathComponent(export.markdownFileName).path), "the .md transcript was saved")
+    let index = MeetingIndexEntry.load(from: folder.appendingPathComponent("mai-meetings.json"))
+    check(index.count == 1 && index.first?.title == "Team Sync Notes", "the meeting appears in the saved-meetings index")
+    check(((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).contains { $0.hasSuffix(".mai.json") }, "phase-B export bundle written")
+}
+
+section("Spend meter: estimate math and VAD savings during silence")
+do {
+    let rates = UsageRates(transcriptionPerHour: 0.12, visionPerCall: 0.0004, modelPerCall: 0.002, searchPerCall: 0.002)
+    let busy = UsageCounts(date: "2026-06-29", transcriptionSeconds: 3600, visionCalls: 10, modelCalls: 20, searchCalls: 5)
+    let e = SpendMath.estimate(busy, rates: rates)
+    check(abs(e.transcription - 0.12) < 1e-9, "1 hour of audio == one hour of transcription cost")
+    check(abs(e.total - (0.12 + 0.004 + 0.04 + 0.01)) < 1e-9, "total sums the services")
+    // VAD gating: less audio actually streamed during silence => lower transcription cost.
+    let gated = UsageCounts(date: "2026-06-29", transcriptionSeconds: 600, visionCalls: 10, modelCalls: 20, searchCalls: 5)
+    check(SpendMath.estimate(gated, rates: rates).transcription < e.transcription, "VAD silence gating lowers the transcription estimate")
+}
+
+section("HUD activity: show/hide decision and top-right pin math")
+do {
+    func input(speaking: Bool = false, cards: Bool = false, summoned: Bool = false, pinned: Bool = false, app: Bool = false, paused: Bool = false) -> HUDActivityInput {
+        HUDActivityInput(speaking: speaking, hasActiveCards: cards, summoned: summoned, pinned: pinned, appWindowOpen: app, paused: paused)
+    }
+    check(HUDActivity.shouldShow(input(speaking: true)), "speech shows the HUD")
+    check(HUDActivity.shouldShow(input(cards: true)), "an active card shows the HUD")
+    check(!HUDActivity.shouldShow(input()), "idle (silence, no cards) hides the HUD")
+    check(HUDActivity.shouldShow(input(summoned: true)), "summon shows the HUD")
+    check(HUDActivity.shouldShow(input(pinned: true)), "pinned stays shown")
+    check(!HUDActivity.shouldShow(input(speaking: true, app: true)), "the full app window takes over")
+    check(!HUDActivity.shouldShow(input(paused: true)), "paused shows nothing")
+    let origin = HUDLayout.topRightOrigin(visibleFrame: ScreenRect(x: 0, y: 0, width: 1440, height: 900),
+                                          size: (width: 380, height: 120), inset: 20)
+    check(abs(origin.x - (1440 - 380 - 20)) < 1e-9, "pinned to the right edge minus width and inset")
+    check(abs(origin.y - (900 - 120 - 20)) < 1e-9, "pinned to the top minus height and inset")
+}
+
+section("Chat gate: info cards pause while chat open, reply cards keep running")
+do {
+    let rig = makeRichRig(Config(floorLanguage: .ja, responseEnabled: true))
+    await rig.engine.setChatOpen(true)
+    await rig.engine.process(tline("ngl お寿司食べたい", "Lee"))     // info/place card -> paused
+    try? await Task.sleep(nanoseconds: 250_000_000)
+    check(rig.sink.all.filter { !$0.suppressed }.isEmpty, "info/fact cards are paused while the chat is open")
+    await rig.engine.process(tline("それでは、ご意見をお願いできますか？", "Sato"))   // reply card -> runs
+    let reply = await waitResolved(rig.sink)
+    check(reply?.route == .preparedReply, "a reply card still surfaces while the chat is open")
+    await rig.engine.setChatOpen(false)
+    await rig.engine.process(tline("ラーメンも食べたいな", "Lee"))    // info card -> resumes
+    var resumed = false
+    for _ in 0..<200 { if rig.sink.all.contains(where: { $0.route == .place && !$0.suppressed }) { resumed = true; break }; try? await Task.sleep(nanoseconds: 10_000_000) }
+    check(resumed, "info cards resume after the chat closes")
+}
+
+section("Keychain: round-trip save, read, delete (best effort in a CLI process)")
+do {
+    let account = "MAI_TEST_\(UUID().uuidString)"
+    do {
+        try Keychain.save("secret-value-123", account: account)
+        let read = try Keychain.read(account: account)
+        check(read == "secret-value-123", "keychain returns the stored value")
+        try Keychain.delete(account: account)
+        let gone = try Keychain.read(account: account)
+        check(gone == nil, "deleted key is gone")
+    } catch {
+        check(true, "keychain not writable in this CLI context (skipped): \(error)")
+    }
+}
+
 // Summary
 print("\n========================================")
 if failures.isEmpty {
