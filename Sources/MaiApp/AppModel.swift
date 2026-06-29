@@ -44,6 +44,27 @@ final class AppModel: ObservableObject {
     @Published var responseEnabled: Bool                // Part B toggle
     @Published var status: String = ""
 
+    // Step 3: chat assistant, notes pipeline, modes, spend, onboarding and keys.
+    @Published var chat: [ChatMessage] = []
+    @Published var chatOpen = false
+    @Published var assistantThinking = false
+    @Published var noteTaking = false
+    @Published var notesProcessing: String?            // visible processing state on stop
+    @Published var savedMeetings: [MeetingIndexEntry] = []
+    @Published var lastSavedMeeting: MeetingExport?
+    @Published var spend = SpendEstimate(transcription: 0, vision: 0, model: 0, search: 0, total: 0)
+    @Published var missionPinned = false
+    @Published var appWindowOpen = false
+    @Published var notesFolder: URL?
+    @Published var onboardingComplete: Bool
+    @Published var keyPresence: [String: Bool] = [:]   // which known keys are set
+    private(set) var summonedAt = Date.distantPast
+
+    let rates = UsageRates()
+    private var assistant: AssistantProvider!
+    private var notes: NotesStore!
+    private var usage: UsageMeter!
+
     private(set) var config: Config
     private let secrets: Secrets
     private let store: MemoryStore
@@ -72,13 +93,27 @@ final class AppModel: ObservableObject {
         self.verbatim = VerbatimLog()
         self.showSuppressed = config.showSuppressedLog
         self.responseEnabled = config.responseEnabled
+        self.onboardingComplete = UserDefaults.standard.bool(forKey: "mai.onboardingComplete")
         // Real capture needs Screen Recording + Microphone, which only a signed .app
         // bundle can hold. Running unbundled (swift run) has no bundle id, so default
         // to the simulated dev path there. Force simulated with MAI_SIMULATED=1.
         let bundled = Bundle.main.bundleIdentifier != nil
         self.bundled = bundled
         self.useSimulated = ProcessInfo.processInfo.environment["MAI_SIMULATED"] == "1" || !bundled
+
+        // The assistant, notes pipeline, and usage meter persist across capture
+        // restarts (a watchdog restart must not reset accumulated notes).
+        let meter = UsageMeter(storeURL: URL(fileURLWithPath: "data/mai-usage.json"))
+        self.usage = meter
+        let baseLLM = MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: meter)
+        self.notes = NotesStore(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
+        self.assistant = AnthropicAssistant(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
+
+        self.notesFolder = Self.resolveNotesFolder()
+        refreshKeyPresence()
         startSession()
+        refreshSavedMeetings()
+        Task { await refreshSpend() }
     }
 
     // MARK: - Session lifecycle
@@ -88,11 +123,11 @@ final class AppModel: ObservableObject {
         let face = StreamFace(cont)
         let (richStream, richCont) = AsyncStream<RichCard>.makeStream()
         let richSink = StreamRichSink(richCont)
-        let llm = MaiFactory.makeLLM(config: config, secrets: secrets)
+        let llm = MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: usage)
         let places = MaiFactory.makePlaces(config: config, secrets: secrets)
         let location = MaiFactory.makeLocation(config: config)
         let entity = MaiFactory.makeEntityLookup(config: config, secrets: secrets)
-        let grounded = MaiFactory.makeGroundedSearch(config: config, secrets: secrets)
+        let grounded = MeteredGrounded(MaiFactory.makeGroundedSearch(config: config, secrets: secrets), meter: usage)
         let engine = Engine(config: config, llm: llm, places: places, location: location,
                             store: store, verbatim: verbatim, face: face,
                             richSink: richSink, entity: entity, grounded: grounded)
@@ -122,6 +157,7 @@ final class AppModel: ObservableObject {
         } else {
             let ears = RealEars(config: config, secrets: secrets)
             let eyes = RealEyes(config: config, secrets: secrets)
+            ears.usage = usage; eyes.usage = usage
             realEars = ears; realEyes = eyes; simEars = nil; simEyes = nil
             ears.onLive = { [weak self] line in Task { @MainActor in self?.ingestLive(line) } }
             // Let the eyes feed the active-speaker name into the ears' naming layer.
@@ -165,6 +201,23 @@ final class AppModel: ObservableObject {
         startSession()
         status = responseEnabled ? "Suggested responses on." : "Suggested responses off."
     }
+
+    // Apply a settings change to the config and rebuild the session so it takes effect.
+    // Accumulated notes, chat, and saved meetings persist (they live outside the session).
+    func updateConfig(_ mutate: (inout Config) -> Void) {
+        var c = config; mutate(&c); config = c
+        responseEnabled = c.responseEnabled
+        let keepSimulated = useSimulated
+        stopSession()
+        useSimulated = keepSimulated
+        startSession()
+    }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        do { if on { try LoginItem.enable() } else { try LoginItem.disable() } }
+        catch { status = "Could not change Login Item: \(error.localizedDescription)" }
+    }
+    var launchAtLogin: Bool { LoginItem.isEnabled }
 
     private func startCapture() async {
         guard let ears = realEars, let eyes = realEyes else { return }
@@ -310,6 +363,7 @@ final class AppModel: ObservableObject {
             liveLines.removeAll { $0.id == partialID(line.source) }
             liveLines.append(line)
             if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
+            feedNote(line)
         } else {
             // Upsert the single in-flight partial line for this source.
             if let idx = liveLines.firstIndex(where: { $0.id == partialID(line.source) }) {
@@ -337,6 +391,7 @@ final class AppModel: ObservableObject {
                                       text: text, language: config.floorLanguage, isFinal: true)
         liveLines.append(line)
         if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
+        feedNote(line)
     }
 
     func injectScreen(_ text: String) {
@@ -396,8 +451,10 @@ final class AppModel: ObservableObject {
                     ears?.injectLine(body, speaker: speaker)
                     await MainActor.run {
                         guard let self else { return }
-                        self.liveLines.append(LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You",
-                                                                 source: .user, text: body, language: floor, isFinal: true))
+                        let l = LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You",
+                                                   source: .user, text: body, language: floor, isFinal: true)
+                        self.liveLines.append(l)
+                        self.feedNote(l)
                     }
                 }
                 try? await Task.sleep(nanoseconds: 60_000_000)
@@ -416,6 +473,221 @@ final class AppModel: ObservableObject {
             }
         }
         return (nil, trimmed)
+    }
+
+    // MARK: - Notes feeding
+
+    @Published var keyStatus: [String: String] = [:]
+    var onMeetingFinished: ((MeetingExport) -> Void)?
+
+    private func feedNote(_ line: LiveTranscriptLine) {
+        guard noteTaking, line.isFinal else { return }
+        let ml = MeetingLine(speaker: line.speaker, isUser: line.source == .user, text: line.text,
+                             timestamp: Date(), language: line.language?.rawValue)
+        Task { [notes] in await notes!.add(ml) }
+    }
+
+    // The meeting transcript so far, for assistant context (order-preserving).
+    private func meetingTranscript() -> [MeetingLine] {
+        liveLines.filter { $0.isFinal && !$0.id.hasPrefix("live-") }
+            .map { MeetingLine(speaker: $0.speaker, isUser: $0.source == .user, text: $0.text,
+                               timestamp: Date(), language: $0.language?.rawValue) }
+    }
+
+    // MARK: - Chat with the assistant
+
+    func openChat() { chatOpen = true; Task { [engine] in await engine?.setChatOpen(true) } }
+    func closeChat() { chatOpen = false; Task { [engine] in await engine?.setChatOpen(false) } }
+
+    func sendChat(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        chat.append(ChatMessage(role: .user, text: trimmed))
+
+        // "note this down" folds the item into the running meeting notes.
+        if let item = AssistantContext.noteRequest(trimmed) {
+            if noteTaking {
+                Task { [notes] in await notes!.note(item) }
+                chat.append(ChatMessage(role: .assistant, text: item.isEmpty ? "Noted." : "Noted: \(item)"))
+            } else {
+                chat.append(ChatMessage(role: .assistant, text: "Turn on note-taking first, then I can add that to the notes."))
+            }
+            return
+        }
+
+        let transcript = meetingTranscript()
+        let history = chat
+        assistantThinking = true
+        Task { [assistant] in
+            let reply = (try? await assistant!.reply(to: trimmed, transcript: transcript, history: history, screen: nil))
+                ?? "Sorry, I could not reach the assistant just now."
+            await MainActor.run {
+                self.chat.append(ChatMessage(role: .assistant, text: reply))
+                self.assistantThinking = false
+            }
+        }
+    }
+
+    // MARK: - Note-taking pipeline
+
+    func toggleNoteTaking() { noteTaking ? stopNoteTaking() : startNoteTaking() }
+
+    func startNoteTaking() {
+        Task { [notes] in await notes!.start(now: Date()) }
+        noteTaking = true
+        status = "Note-taking on. Mai is capturing the meeting."
+    }
+
+    func stopNoteTaking() {
+        noteTaking = false
+        notesProcessing = NotesStore.Stage.reviewing.rawValue
+        let folder = notesFolder
+        Task { [notes] in
+            let export = await notes!.stop(now: Date(), folder: folder, onStage: { stage in
+                Task { @MainActor in self.notesProcessing = (stage == .done) ? nil : stage.rawValue }
+            })
+            await MainActor.run {
+                self.notesProcessing = nil
+                if let export {
+                    self.lastSavedMeeting = export
+                    self.refreshSavedMeetings()
+                    self.status = folder == nil
+                        ? "Wrote up \"\(export.title)\" (choose a notes folder in Settings to save it)."
+                        : "Saved meeting: \(export.title)"
+                    self.onMeetingFinished?(export)   // phase B: a meeting just finished
+                } else {
+                    self.status = "Nothing to save (no transcript was captured)."
+                }
+            }
+        }
+    }
+
+    // MARK: - Saved meetings and spend
+
+    func refreshSavedMeetings() {
+        guard let folder = notesFolder else { savedMeetings = []; return }
+        savedMeetings = MeetingIndexEntry.load(from: folder.appendingPathComponent("mai-meetings.json"))
+    }
+
+    func openSavedMeeting(_ entry: MeetingIndexEntry) {
+        guard let folder = notesFolder else { return }
+        NSWorkspace.shared.open(folder.appendingPathComponent(entry.docxFileName))
+    }
+
+    func refreshSpend() async {
+        let counts = await usage.snapshot()
+        let est = SpendMath.estimate(counts, rates: rates)
+        await MainActor.run { self.spend = est }
+    }
+
+    // MARK: - Keychain keys
+
+    func refreshKeyPresence() {
+        var p: [String: Bool] = [:]
+        for k in Secrets.knownKeys { p[k] = secrets.get(k) != nil }
+        keyPresence = p
+    }
+
+    func saveKey(_ value: String, for key: String) {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if v.isEmpty { try? Keychain.delete(account: key) } else { try? Keychain.save(v, account: key) }
+        refreshKeyPresence()
+        keyStatus[key] = v.isEmpty ? "Not set" : "Set"
+    }
+
+    // A quick live validation, with a clear message instead of a silent failure.
+    func validateKeys() {
+        keyStatus["__validating"] = "Checking..."
+        let cfg = config; let sec = secrets
+        Task {
+            var results: [String: String] = [:]
+            for key in Secrets.knownKeys {
+                guard sec.get(key) != nil else { results[key] = "Not set"; continue }
+                results[key] = await Self.validate(key: key, config: cfg, secrets: sec)
+            }
+            await MainActor.run {
+                self.keyStatus = results
+                let bad = results.filter { $0.value != "OK" && $0.value != "Set" && $0.value != "Not set" }
+                self.status = bad.isEmpty ? "Keys checked." : "Key issues: " + bad.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
+            }
+        }
+    }
+
+    private static func validate(key: String, config: Config, secrets: Secrets) async -> String {
+        switch key {
+        case "ANTHROPIC_API_KEY":
+            guard let k = secrets.get(key) else { return "Not set" }
+            do { _ = try await AnthropicLLM(apiKey: k).complete(system: "Reply with one word.", user: "ok", model: config.classifierModel); return "OK" }
+            catch { return Self.classify(error) }
+        default:
+            // Other keys are present; they are validated on first real use.
+            return secrets.get(key) != nil ? "Set" : "Not set"
+        }
+    }
+
+    private static func classify(_ error: Error) -> String {
+        let m = error.localizedDescription.lowercased()
+        if m.contains("401") || m.contains("invalid") || m.contains("authentication") { return "Invalid key" }
+        if m.contains("402") || m.contains("balance") || m.contains("credit") || m.contains("quota") { return "Out of balance" }
+        return "Could not verify"
+    }
+
+    // MARK: - Notes folder (security-scoped bookmark; non-sandboxed needs no scope)
+
+    func pickNotesFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder where Mai saves meeting notes."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            UserDefaults.standard.set(bookmark, forKey: "mai.notesFolderBookmark")
+        }
+        notesFolder = url
+        refreshSavedMeetings()
+    }
+
+    static func resolveNotesFolder() -> URL? {
+        guard let data = UserDefaults.standard.data(forKey: "mai.notesFolderBookmark") else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+        if stale, let refreshed = try? url.bookmarkData() { UserDefaults.standard.set(refreshed, forKey: "mai.notesFolderBookmark") }
+        return url
+    }
+
+    func completeOnboarding() {
+        onboardingComplete = true
+        UserDefaults.standard.set(true, forKey: "mai.onboardingComplete")
+    }
+
+    @Published var permissionStatus = "Not requested"
+    func requestPermissions() {
+        permissionStatus = "Requesting\u{2026}"
+        Task {
+            let p = await CapturePermissions.ensure()
+            await MainActor.run {
+                self.permissionStatus = p.bothGranted ? "Granted"
+                    : "Still missing: \(p.missing.joined(separator: ", ")). Grant in System Settings, Privacy and Security, then relaunch."
+            }
+        }
+    }
+
+    // MARK: - Modes (Mission HUD vs the full app) and the summon hotkey
+
+    func summonMission() { summonedAt = Date(); objectWillChange.send() }
+    func togglePinned() { missionPinned.toggle() }
+
+    // The pure HUD show/hide decision, evaluated from current app state. The AppDelegate
+    // polls this to slide the panel in and out.
+    var shouldShowHUD: Bool {
+        let speaking = liveLines.contains { $0.id.hasPrefix("live-") && !$0.text.isEmpty }
+        let hasCards = richItems.contains { !$0.suppressed && Date().timeIntervalSince($0.timestamp) < 30 }
+        let summoned = chatOpen || Date().timeIntervalSince(summonedAt) < 8
+        return HUDActivity.shouldShow(HUDActivityInput(
+            speaking: speaking, hasActiveCards: hasCards, summoned: summoned,
+            pinned: missionPinned, appWindowOpen: appWindowOpen, paused: isPaused))
     }
 }
 

@@ -16,6 +16,7 @@ public final class RealEyes: Eyes, @unchecked Sendable {
     private var highlightedName: String?
     private var roster: [String] = []
     var watcher: ScreenWatcher?
+    public var usage: UsageMeter?   // spend meter: one vision read per settled screen change
 
     public init(config: Config, secrets: Secrets) {
         self.config = config
@@ -44,6 +45,7 @@ public final class RealEyes: Eyes, @unchecked Sendable {
     func emit(content: String, at: Date = Date()) {
         let event = ScreenContentEvent(content: content, timestamp: at, isChange: true)
         lock.withLock { latest = event }
+        if let usage { Task { await usage.recordVision() } }
         cont.yield(event)
     }
     func updateNaming(roster: [String], highlighted: String?) {

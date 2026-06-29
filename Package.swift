@@ -39,10 +39,11 @@ let package = Package(
         // Pure-Swift zip (MIT, v0.9.20, confirmed 2026-06-29) for writing .docx
         // meeting notes (a .docx is a zip of OOXML parts). Foundation-only, no UI.
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.20"),
-        // User-customizable global keyboard shortcut for the HUD summon hotkey
-        // (MIT, v3.0.1, confirmed 2026-06-29). Uses Carbon hotkey registration, so
-        // no Accessibility permission and no special entitlement.
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "3.0.1"),
+        // Note: the global summon hotkey is implemented directly on Carbon
+        // RegisterEventHotKey (no Accessibility permission, no entitlement), the same
+        // mechanism the KeyboardShortcuts package wraps. That package is not used
+        // because its 3.x uses SwiftUI macros that require full Xcode, and this
+        // project builds with Command Line Tools only.
     ],
     targets: [
         .target(
@@ -73,10 +74,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "MaiApp",
-            dependencies: [
-                "MaiCore", "MaiCapture",
-                .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
-            ]
+            dependencies: ["MaiCore", "MaiCapture"]
         ),
         .executableTarget(
             name: "MaiSmoke",

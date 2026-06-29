@@ -30,6 +30,14 @@ public final class RealEars: Ears, @unchecked Sendable {
     // its source's Soniox stream lifecycle; audio is routed through it.
     private var micGate: VadGatedSource?
     private var systemGate: VadGatedSource?
+    // Spend meter (optional): counts transcription by audio-seconds actually sent, so
+    // VAD gating's savings during silence are reflected.
+    public var usage: UsageMeter?
+    private func recordTranscription(bytes: Int) {
+        guard let usage else { return }
+        let seconds = Double(bytes) / Double(config.sttSampleRate * 2)   // Int16 mono
+        Task { await usage.recordTranscription(seconds: seconds) }
+    }
 
     public init(config: Config, secrets: Secrets) {
         self.config = config
@@ -71,12 +79,14 @@ public final class RealEars: Ears, @unchecked Sendable {
     // Route audio through the VAD gate when present, else straight to the socket.
     func feedMic(_ data: Data) {
         noteCaptured()
-        if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent() }
+        if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
     }
     func feedSystem(_ data: Data) {
         noteCaptured()
-        if let g = systemGate { g.feed(data) } else { systemClient?.sendAudio(data); noteSent() }
+        if let g = systemGate { g.feed(data) } else { systemClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
     }
+    // Called by the VAD gate when it actually forwards audio to Soniox.
+    func recordSentBytes(_ bytes: Int) { recordTranscription(bytes: bytes) }
 
     public func stop() {
         // Pause is a privacy valve: tear down capture AND close the sockets.

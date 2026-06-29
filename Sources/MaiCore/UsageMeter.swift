@@ -36,6 +36,10 @@ public struct SpendEstimate: Sendable, Equatable {
     public var model: Double
     public var search: Double
     public var total: Double
+    public init(transcription: Double, vision: Double, model: Double, search: Double, total: Double) {
+        self.transcription = transcription; self.vision = vision
+        self.model = model; self.search = search; self.total = total
+    }
 }
 
 // Pure, deterministic spend math (unit-tested).
@@ -109,5 +113,16 @@ public struct MeteredLLM: LLMProvider {
     public func complete(system: String, user: String, model: String) async throws -> String {
         await meter.recordModel()
         return try await wrapped.complete(system: system, user: user, model: model)
+    }
+}
+
+// Wraps a grounded-search provider to count search calls toward the spend meter.
+public struct MeteredGrounded: GroundedSearch {
+    private let wrapped: GroundedSearch
+    private let meter: UsageMeter
+    public init(_ wrapped: GroundedSearch, meter: UsageMeter) { self.wrapped = wrapped; self.meter = meter }
+    public func answer(query: String, interface: Language) async throws -> GroundedResult {
+        await meter.recordSearch()
+        return try await wrapped.answer(query: query, interface: interface)
     }
 }
