@@ -47,6 +47,9 @@ public actor Engine {
     // nil the engine keeps the step-1 Card/Face path unchanged (console + tests).
     private let richSink: RichCardSink?
     private let richEnricher: RichCardEnricher?
+    // While the assistant chat is open, info/fact cards pause but reply cards keep
+    // running in the background, so a suggested reply is never missed.
+    private var chatOpen = false
 
     private var context: RollingContext
     private let session: SessionInfo
@@ -151,11 +154,16 @@ public actor Engine {
 
     // MARK: - Rich path (Step 3): instant skeleton, async enrichment, no lag
 
+    public func setChatOpen(_ open: Bool) { chatOpen = open }
+
     private func handleRich(_ trigger: Trigger, event: TranscriptEvent, t0: Date, enricher: RichCardEnricher) {
         // Reply lock: a reference cue ("your turn", "ご意見を…") yields only a suggested
         // reply, so with the reply toggle off there is nothing to surface for it.
         // Info/fact cards (place, knowledge, screen) always surface regardless.
         if trigger.type == .reference && !config.responseEnabled { return }
+        // While the assistant chat is open, pause info and fact cards but keep reply
+        // (what-to-say-back) cards running in the background.
+        if chatOpen && trigger.type != .reference { return }
         let topic = (trigger.payload["query"] ?? trigger.span).trimmingCharacters(in: .whitespacesAndNewlines)
         let headline = headline(for: trigger, topic: topic)
         let pre = surfacing.preEvaluate(trigger: trigger, headline: headline, now: event.timestamp)

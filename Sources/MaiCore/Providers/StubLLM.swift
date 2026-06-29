@@ -25,6 +25,10 @@ public struct StubLLM: LLMProvider {
         if system.contains("lookup router") { return route(user) }
         if system.contains("Mai's explainer") { return explain(user) }
         if system.contains("Mai's responder") { return respond(user) }
+        if system.contains("meeting assistant") { return assistantReply(user) }
+        if system.contains("meeting notes writer") { return notesWriter(user) }
+        if system.contains("notes verifier") { return notesVerify(user) }
+        if system.contains("meeting title") { return object(["title": "Team Sync Notes"]) }
         if system.lowercased().contains("translate") {
             // Translation fallback (Wikipedia native-summary path): echo the input.
             return user
@@ -146,6 +150,67 @@ public struct StubLLM: LLMProvider {
         default:
             return "{}"
         }
+    }
+
+    // MARK: - Step 3 assistant / notes stubs
+
+    private static func assistantReply(_ user: String) -> String {
+        // Echo the user's own lines so the integration test can confirm the assistant
+        // identifies what the user said. The real model does the real summary.
+        let youLines = user.split(separator: "\n").map(String.init)
+            .filter { $0.hasPrefix("You: ") }.map { String($0.dropFirst(5)) }
+        let said = youLines.isEmpty ? "nothing yet" : youLines.joined(separator: "; ")
+        return "The group is discussing the meeting topics. You said: \(said)."
+    }
+
+    private static func notesWriter(_ user: String) -> String {
+        // Build supported bullets from real transcript lines, then simulate a model
+        // that over-claims by adding one fabricated, unsupported bullet (the verifier
+        // pass must drop it).
+        let transcript = linesBetween("Transcript (lines marked", "Explicitly noted items:", in: user)
+        var bullets: [String] = []
+        for line in transcript.prefix(4) {
+            if let r = line.range(of: ": ") { bullets.append(String(line[r.upperBound...])) }
+        }
+        // Fold in explicitly noted items (they belong in the notes).
+        for item in linesBetween("Explicitly noted items:", "Produce the JSON now.", in: user) {
+            bullets.append(item.hasPrefix("- ") ? String(item.dropFirst(2)) : item)
+        }
+        // Simulate a model that over-claims by adding one fabricated, unsupported bullet.
+        bullets.append("The team approved a budget of fifty million dollars.")
+        return object(["summary": "The group discussed several topics during the meeting.",
+                       "sections": [["heading": "Key Points", "bullets": bullets]]])
+    }
+
+    private static func notesVerify(_ user: String) -> String {
+        let transcript = linesBetween("Transcript:", "Explicitly noted items", in: user)
+            .joined(separator: " ").lowercased()
+        let noted = linesBetween("Explicitly noted items", "Candidate bullets:", in: user)
+            .map { ($0.hasPrefix("- ") ? String($0.dropFirst(2)) : $0).lowercased() }
+        let bullets = linesBetween("Candidate bullets:", "Produce the JSON now.", in: user)
+        var results: [[String: Any]] = []
+        for line in bullets {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let idx = Int(line[..<colon].trimmingCharacters(in: .whitespaces)) ?? -1
+            let text = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces).lowercased()
+            let tokens = text.split { !$0.isLetter }.map(String.init).filter { $0.count >= 5 }
+            // Supported if it overlaps the transcript, or it is one of the noted items.
+            let supported = tokens.contains { transcript.contains($0) } || noted.contains { $0.contains(text) || text.contains($0) }
+            if idx >= 0 { results.append(["index": idx, "supported": supported]) }
+        }
+        return object(["results": results])
+    }
+
+    private static func linesBetween(_ start: String, _ end: String, in text: String) -> [String] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var out: [String] = []; var inside = false
+        for line in lines {
+            if !inside { if line.contains(start) { inside = true }; continue }
+            if line.contains(end) { break }
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { out.append(t) }
+        }
+        return out
     }
 
     // MARK: - tiny JSON builders / parsers

@@ -44,3 +44,11 @@ Mai.app/
 *.wav
 *.m4a
 screenshots/
+
+# Saved meetings, notes, and local usage counters (sensitive; stay local only)
+*.docx
+*.mai.json
+mai-meetings.json
+mai-usage.json
+meetings/
+notes/
