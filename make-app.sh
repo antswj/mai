@@ -12,9 +12,9 @@ set -euo pipefail
 
 APP_NAME="Mai"
 BUNDLE_ID="com.mai.app"     # stable: part of the TCC identity, keep it constant
-VERSION="0.2"
-BUILD="2"
-MIN_OS="15.0"              # SCStreamConfiguration.captureMicrophone is macOS 15+
+VERSION="0.3"
+BUILD="3"
+MIN_OS="15.0"              # deploys to macOS 15; Liquid Glass is gated to 26 with a fallback
 
 # Signing identity. A stable cert makes the Screen Recording / Microphone grants
 # PERSIST across rebuilds; ad-hoc grants reset every rebuild because the code hash
@@ -70,6 +70,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>   <string>${VERSION}</string>
     <key>CFBundleVersion</key>              <string>${BUILD}</string>
     <key>LSMinimumSystemVersion</key>       <string>${MIN_OS}</string>
+    <key>LSUIElement</key>                  <true/>
     <key>NSMicrophoneUsageDescription</key> <string>Mai uses the microphone to transcribe your speech in real time during meetings.</string>
 </dict>
 </plist>
@@ -78,11 +79,12 @@ PLIST
 printf 'APPL????' > "${CONTENTS}/PkgInfo"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
-# No --deep (single binary), no --options runtime and no entitlements: a
-# non-sandboxed local app reaches mic + screen through TCC alone. Hardened runtime
-# would instead require the audio-input entitlement.
-codesign --force --sign "$SIGN_ID" "$APP"
-codesign --verify --verbose=2 "$APP" || true
+# Sign with the hardened runtime and Mai's entitlements (required for notarization
+# later). Only the microphone entitlement is needed for this non-sandboxed app;
+# screen recording is TCC-only. No --deep (single binary), no JIT/library-validation
+# relaxations.
+codesign --force --options runtime --entitlements "${ROOT}/Mai.entitlements" --sign "$SIGN_ID" "$APP"
+codesign --verify --strict --verbose=2 "$APP" || true
 
 SIGN_DESC="ad-hoc (grants reset on each rebuild)"
 [ "$SIGN_ID" != "-" ] && SIGN_DESC="\"$SIGN_ID\" (grants persist across rebuilds)"
