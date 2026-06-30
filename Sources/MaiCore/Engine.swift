@@ -57,6 +57,7 @@ public actor Engine {
     // Always-seeing: the latest stored screen read. Updated only on a change event;
     // a static screen is never re-read, the stored value is reused.
     private var currentScreenText: String = ""
+    private var currentScreenSubject: String?   // the salient subject to look up
 
     public var sessionId: String { session.id }
 
@@ -173,16 +174,23 @@ public actor Engine {
         }
         let latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
 
-        // screenReference is already captured: build and persist the card instantly,
-        // no enrichment task needed.
+        // A verbal "look at the screen" cue surfaces a USEFUL, sourced card about the
+        // screen's subject (run through the lookup router), not a description. If there
+        // is no identifiable subject, fall back to showing the stored read (the user
+        // explicitly asked to see the screen).
         if trigger.type == .screenReference {
-            var card = RichCard(trigger: .screenReference, timestamp: event.timestamp, route: .screen,
-                                tier: pre.tier, score: pre.score, headline: headline,
-                                info: currentScreenText.trimmingCharacters(in: .whitespacesAndNewlines),
-                                latencyMs: latencyMs)
-            card.pending = []
-            richSink?.upsert(card)
-            persistRich(card)
+            if let subject = currentScreenSubject, !subject.isEmpty {
+                surfaceScreenCard(subject: subject, content: currentScreenText, now: event.timestamp,
+                                  tier: pre.tier, score: pre.score, latencyMs: latencyMs, enricher: enricher)
+            } else {
+                var card = RichCard(trigger: .screenReference, timestamp: event.timestamp, route: .screen,
+                                    tier: pre.tier, score: pre.score, headline: headline,
+                                    info: currentScreenText.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    latencyMs: latencyMs)
+                card.pending = []
+                richSink?.upsert(card)
+                persistRich(card)
+            }
             return
         }
 
@@ -288,8 +296,49 @@ public actor Engine {
         // verbal gate. It never re-reads a static screen.
         guard event.isChange else { return }
         currentScreenText = event.content
+        currentScreenSubject = event.subject
         save(record(kind: "screen", content: event.content, language: nil, speaker: nil, at: event.timestamp))
         verbatim.appendScreen(event, sessionId: session.id)
+
+        // Rich path: a settled screen change proactively surfaces a USEFUL, sourced card
+        // about the slide's subject (no verbal cue required), so a presentation produces
+        // cards on its own. Only when there is a real subject to look up; deduped per
+        // subject so the same slide does not refire and a later verbal cue does not
+        // double-fire. Paused while the chat is open (it is an info card).
+        guard let enricher = richEnricher, !chatOpen,
+              let subject = event.subject, !subject.isEmpty else { return }
+        surfaceScreenCard(subject: subject, content: event.content, now: event.timestamp,
+                          tier: .medium, score: 0.75, latencyMs: 0, enricher: enricher)
+    }
+
+    // Surface a useful, sourced card about a screen subject by running it through the
+    // lookup router (entity/fresh/technical), in the interface language. Shared by the
+    // proactive screen-change path and the verbal "look at the screen" cue, deduped on
+    // the subject so they never double-fire for the same content.
+    private func surfaceScreenCard(subject: String, content: String, now: Date,
+                                   tier: Tier, score: Double, latencyMs: Int, enricher: RichCardEnricher) {
+        let trig = Trigger(type: .screenReference, span: subject, reason: "screen subject",
+                           confidence: score, payload: ["query": subject])
+        let pre = surfacing.preEvaluate(trigger: trig, headline: subject, now: now)
+        guard pre.surface else {
+            if config.showSuppressedLog { richSink?.suppressed(headline: subject, trigger: .screenReference, reason: pre.reason) }
+            return
+        }
+        let skeleton = RichCard(trigger: .screenReference, timestamp: now, route: .pending,
+                                tier: pre.tier, score: pre.score, headline: subject,
+                                pending: [RichCard.Part.route.rawValue], latencyMs: latencyMs)
+        richSink?.upsert(skeleton)
+        // Look the subject up like any knowledge query; the screen text is the context.
+        // Interface language drives the answer; native subject names resolve cross-language.
+        let request = LookupRequest.knowledge(topic: subject, window: content,
+                                              spoken: config.interfaceLanguage, respond: false)
+        let key = Surfacing.groupingKey(trigger: trig, headline: subject)
+        Task { [weak self] in
+            guard let self else { return }
+            await enricher.submit(skeleton, request: request, supersedeKey: key) { final in
+                Task { await self.persistRich(final) }
+            }
+        }
     }
 
     // MARK: - Notes & summary
