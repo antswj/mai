@@ -1112,6 +1112,20 @@ do {
     check(!sup5.isEcho("Let us review the third quarter revenue numbers now", at: t0.addingTimeInterval(30)),
           "a match outside the window is not echo")
 
+    // REVERSE ORDER (the live failure): the mic echo final arrives BEFORE the matching
+    // system final. The hold re-checks after the system final is recorded, so a system
+    // line up to forwardSeconds after the mic line still counts as echo.
+    var sup6 = EchoSuppressor()
+    let micAt = t0
+    sup6.noteSystem("Let us review the third quarter revenue numbers now", at: micAt.addingTimeInterval(1.8))
+    check(sup6.isEcho("Let us review the third quarter revenue numbers now", at: micAt),
+          "a system final finalizing ~1.8s after the mic echo (during the hold) is still echo")
+    // But a system line far after the mic line (beyond the forward tolerance) is not.
+    var sup7 = EchoSuppressor()
+    sup7.noteSystem("Let us review the third quarter revenue numbers now", at: micAt.addingTimeInterval(6))
+    check(!sup7.isEcho("Let us review the third quarter revenue numbers now", at: micAt),
+          "a system final far after the mic line (past the forward tolerance) is not echo")
+
     // Pure similarity helpers.
     check(EchoSuppressor.similarity("hello world", "hello world") == 1, "identical text -> 1.0")
     check(EchoSuppressor.similarity("hello world", "completely different") < 0.3, "different text -> low")

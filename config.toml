@@ -88,6 +88,17 @@ offset = 0.35                     # probability below which audio counts as sile
 silence_hangover_seconds = 4      # sustained silence before tearing the stream down (avoids flapping on pauses)
 preroll_seconds = 1.0             # pre-onset audio kept in a ring buffer and flushed so the first word is not clipped
 
+[echo]
+# Speaker-to-mic echo suppression: when audio plays through the speakers, the mic
+# picks it up and it would be transcribed twice (once as the real speaker from system
+# audio, once wrongly as "You"). Mai drops the mic copy. While system audio is
+# playing, a mic line is held briefly so a matching system line that finalizes
+# slightly later is still caught, regardless of which stream finalizes first. Genuine
+# user speech in a quiet room is never held. Headphones remove the echo at the source.
+# Set MAI_DEBUG_ECHO=1 to log both streams and the decisions.
+suppression = true
+hold_seconds = 2.0                # how long a mic line is held while system audio is active
+
 [location]
 test_lat = 35.7016                # public Funabashi Station area, NOT a home address
 test_lng = 139.9853

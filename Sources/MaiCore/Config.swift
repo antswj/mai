@@ -53,6 +53,11 @@ public struct Config: Sendable {
     public var vadPrerollSeconds: Double
     public var vadOnset: Double
     public var vadOffset: Double
+    // Echo suppression (mic picking up speaker output). hold = how long a mic final is
+    // held when system audio is active, so a matching system final can be compared
+    // regardless of which stream finalizes first.
+    public var echoSuppression: Bool
+    public var echoHoldSeconds: Double
 
     public init(
         llmProvider: String = "anthropic",
@@ -98,7 +103,9 @@ public struct Config: Sendable {
         vadSilenceHangoverSeconds: Double = 4,
         vadPrerollSeconds: Double = 1.0,
         vadOnset: Double = 0.5,
-        vadOffset: Double = 0.35
+        vadOffset: Double = 0.35,
+        echoSuppression: Bool = true,
+        echoHoldSeconds: Double = 2.0
     ) {
         self.llmProvider = llmProvider; self.placesProvider = placesProvider
         self.classifierModel = classifierModel; self.drafterModel = drafterModel; self.screenModel = screenModel
@@ -120,6 +127,7 @@ public struct Config: Sendable {
         self.vadEnabled = vadEnabled; self.vadEngine = vadEngine
         self.vadSilenceHangoverSeconds = vadSilenceHangoverSeconds; self.vadPrerollSeconds = vadPrerollSeconds
         self.vadOnset = vadOnset; self.vadOffset = vadOffset
+        self.echoSuppression = echoSuppression; self.echoHoldSeconds = echoHoldSeconds
     }
 
     /// Load from a config.toml. Missing file or missing keys fall back to defaults.
@@ -180,6 +188,8 @@ public struct Config: Sendable {
         if let v = dbl("vad", "preroll_seconds") { c.vadPrerollSeconds = v }
         if let v = dbl("vad", "onset") { c.vadOnset = v }
         if let v = dbl("vad", "offset") { c.vadOffset = v }
+        if let v = bln("echo", "suppression") { c.echoSuppression = v }
+        if let v = dbl("echo", "hold_seconds") { c.echoHoldSeconds = v }
         return c
     }
 }

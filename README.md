@@ -268,7 +268,11 @@ With real capture (`open Mai.app`, permissions granted):
 10. With audio playing through the speakers (no headphones), have a remote participant
     talk: confirm their speech shows once, as the real speaker, not doubled as "You".
     When you speak, it still shows as "You". (Headphones remove the echo at the source;
-    Mai filters it without them.)
+    Mai filters it without them.) If it still doubles, run from a terminal with
+    `MAI_DEBUG_ECHO=1 open Mai.app` (or `MAI_DEBUG_ECHO=1 swift run Mai`) and the
+    console shows each stream's finals and the echo decision, which reveals whether the
+    two copies are identical (ordering) or transcribed differently; tune `[echo]
+    hold_seconds` in `config.toml`, or set `suppression = false` to turn it off.
 11. Share a slide deck and advance a slide: confirm a useful, sourced card appears
     about the slide's subject (facts, a breakdown, figures), in your interface language,
     not a description, and a new slide produces a new card. A Japanese or Chinese slide
