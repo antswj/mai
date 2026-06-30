@@ -78,12 +78,28 @@ struct MissionHUDView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             LivingGlow(presence: presence)
             Text(model.isPaused ? "Paused" : "Mai")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
             Spacer()
+            // Quiet icon-only controls (each with an accessibility label) so the header
+            // stays glanceable: translate, mute, ask, pause.
+            Button { model.toggleTranslation() } label: {
+                Image(systemName: model.translationOn ? "character.bubble.fill" : "character.bubble")
+                    .foregroundStyle(model.translationOn ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Translate the transcript into \(model.config.interfaceLanguage.rawValue.uppercased())")
+            .accessibilityLabel(model.translationOn ? "Turn off translation" : "Translate transcript")
+            Button { model.toggleMute() } label: {
+                Image(systemName: model.micMuted ? "mic.slash.fill" : "mic")
+                    .foregroundStyle(model.micMuted ? Color.red : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(model.micMuted ? "Unmute your microphone" : "Mute your microphone")
+            .accessibilityLabel(model.micMuted ? "Unmute microphone" : "Mute microphone")
             Button { withAnimation(.easeInOut(duration: 0.2)) { showAsk.toggle() } } label: {
                 Image(systemName: showAsk ? "xmark" : "text.bubble")
             }
@@ -98,10 +114,11 @@ struct MissionHUDView: View {
         .foregroundStyle(.secondary)
     }
 
-    // The transcript area: as many recent lines as fit, scrolling within its height,
-    // pinned to the newest (the active line emphasized).
+    // The transcript area: a small recent window so the HUD stays compact (the full
+    // transcript is in the app). A bounded window keeps the measured natural height
+    // small, so the panel sizes down to its content instead of pinning near the Dock.
     private var transcriptArea: some View {
-        let lines = Array(model.liveLines.suffix(40))
+        let lines = Array(model.liveLines.suffix(6))
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
@@ -132,9 +149,10 @@ struct MissionHUDView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(cards) { card in
-                    MiniCard(card: card, ruby: model.config.ruby, pinned: model.isPinned(card.id)) {
-                        model.isPinned(card.id) ? model.unpin(card.id) : model.pin(card)
-                    }
+                    MiniCard(card: card, ruby: model.config.ruby,
+                             pinned: model.isPinned(card.id), expanded: model.isExpanded(card.id),
+                             onTogglePin: { model.isPinned(card.id) ? model.unpin(card.id) : model.pin(card) },
+                             onToggleExpand: { withAnimation(.easeInOut(duration: 0.2)) { model.toggleExpand(card.id) } })
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -146,17 +164,28 @@ struct MissionHUDView: View {
     }
 }
 
-// A compact card for the HUD: headline, a few lines of info or the reply, a source.
+// A compact card for the HUD. Collapsed: headline, a snippet, and a small image
+// thumbnail. Tap (the body or the chevron) to expand to the full info, a larger image,
+// the reply, and the sources. Pin and source links stay distinct tap targets.
 struct MiniCard: View {
     let card: RichCard
     var ruby: Bool
     var pinned: Bool = false
+    var expanded: Bool = false
     var onTogglePin: (() -> Void)?
+    var onToggleExpand: (() -> Void)?
+    private var hasImage: Bool { (card.imageURL.flatMap(URL.init(string:))) != nil }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(card.headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    .lineLimit(expanded ? nil : 1)
                 Spacer()
+                if onToggleExpand != nil {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 if let onTogglePin {
                     Button(action: onTogglePin) {
                         Image(systemName: pinned ? "pin.fill" : "pin")
@@ -165,11 +194,35 @@ struct MiniCard: View {
                     .buttonStyle(.plain).accessibilityLabel(pinned ? "Unpin card" : "Pin card")
                 }
             }
+
+            // Image: a small thumbnail collapsed, a larger image when expanded.
+            if let urlStr = card.imageURL, let url = URL(string: urlStr) {
+                AsyncImage(url: url) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFill()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: expanded ? 130 : 56)
+                            .clipped().clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
+                            .frame(height: expanded ? 130 : 56)
+                    }
+                }
+            } else if card.isPending(.image) {
+                RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12)).frame(height: 56)
+                    .overlay(ProgressView().controlSize(.small))
+            }
+
             if let info = card.info, !info.isEmpty {
-                Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(4)
+                Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(expanded ? nil : 3)
             } else if card.isLoading {
                 ProgressView().controlSize(.small)
             }
+
+            if card.unverified, expanded {
+                Label("Unverified", systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(.secondary)
+            }
+
             if let r = card.response {
                 Divider().opacity(0.4)
                 if ruby && r.language != .en {
@@ -179,9 +232,28 @@ struct MiniCard: View {
                 }
                 if !r.translation.isEmpty { Text(r.translation).font(.caption).foregroundStyle(.secondary) }
             }
-            if let source = card.source { Text(source.title).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+
+            // Sources: the primary one collapsed, all of them (tappable) when expanded.
+            let sources = card.sources.isEmpty ? (card.source.map { [$0] } ?? []) : card.sources
+            if expanded {
+                ForEach(Array(sources.prefix(4).enumerated()), id: \.offset) { _, src in
+                    if let url = URL(string: src.url) {
+                        Button { NSWorkspace.shared.open(url) } label: {
+                            HStack(spacing: 4) { Image(systemName: "link").font(.caption2); Text(src.title).font(.caption).lineLimit(1) }
+                        }.buttonStyle(.link)
+                    }
+                }
+                if let action = card.action, let urlStr = action.params["url"], let url = URL(string: urlStr) {
+                    Button(action.label) { NSWorkspace.shared.open(url) }.buttonStyle(.borderedProminent).controlSize(.small)
+                }
+            } else if let first = sources.first {
+                Text(first.title).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
         }
         .padding(10)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+        // Tap the card body (not the buttons) to expand/collapse.
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture { onToggleExpand?() }
     }
 }

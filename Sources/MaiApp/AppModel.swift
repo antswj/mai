@@ -50,6 +50,8 @@ final class AppModel: ObservableObject {
     @Published var useSimulated: Bool
     @Published var responseEnabled: Bool                // Part B toggle
     @Published var translationOn: Bool                  // live-transcript translation toggle
+    @Published var micMuted: Bool = false               // mute the local mic (keep system audio + screen)
+    @Published var expandedCardIds: Set<String> = []    // HUD cards expanded to full detail
     @Published var status: String = ""
     @Published var headphonesTip = false                // one-time tip: headphones remove echo
     @Published var hudMaxHeight: CGFloat = 600           // set by the HUD controller from the screen
@@ -178,6 +180,7 @@ final class AppModel: ObservableObject {
             let ears = RealEars(config: config, secrets: secrets)
             let eyes = RealEyes(config: config, secrets: secrets)
             ears.usage = usage; eyes.usage = usage
+            ears.micMuted = micMuted   // survive watchdog/auto-retry session rebuilds
             realEars = ears; realEyes = eyes; simEars = nil; simEyes = nil
             ears.onLive = { [weak self] line in Task { @MainActor in self?.ingestLive(line) } }
             ears.onClearPartial = { [weak self] source in Task { @MainActor in self?.clearPartial(source) } }
@@ -416,6 +419,20 @@ final class AppModel: ObservableObject {
     var isCapturing: Bool { captureState == .capturing }
 
     func togglePause() { isPaused ? resume() : pause() }
+
+    // Mute the local mic only (system audio and the screen keep going). A no-op in
+    // simulated mode beyond flipping the indicator.
+    func toggleMute() {
+        micMuted.toggle()
+        realEars?.micMuted = micMuted
+        status = micMuted ? "Microphone muted (your voice is not captured)." : "Microphone unmuted."
+    }
+
+    // Expand or collapse a card in Mission mode to show its full detail and image.
+    func toggleExpand(_ id: String) {
+        if expandedCardIds.contains(id) { expandedCardIds.remove(id) } else { expandedCardIds.insert(id) }
+    }
+    func isExpanded(_ id: String) -> Bool { expandedCardIds.contains(id) }
 
     func pause() {
         realEars?.stop(); realEyes?.stop()

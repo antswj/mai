@@ -43,6 +43,7 @@ struct MenuBarView: View {
 
             Divider()
             Button(model.isPaused ? "Resume Capture" : "Pause Capture") { model.togglePause() }
+            Button(model.micMuted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
             Button("Show Mission Mode") { summon() }
             Button("Open Mai") { openApp() }
             Divider()

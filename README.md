@@ -285,10 +285,17 @@ With real capture (`open Mai.app`, permissions granted):
     cards area and stops auto-dismissing. Pin a few and swipe (or use the arrows and
     page dots) to page through them. The X unpins. The note button marks a pinned card
     for the meeting notes, so its content appears in the exported `.docx` and `.md`.
-14. Confirm the HUD starts small when idle or short, grows downward as the transcript
-    and cards lengthen, stops at the top of the Dock, and shrinks back when content is
-    removed; when both are shown and tall, it settles into roughly 60 percent transcript
-    over 40 percent cards, each scrolling on its own.
+14. Confirm the Mission mode HUD stays compact: it shows a small recent transcript
+    window and stays small, rather than growing tall as the meeting goes on (the full
+    transcript is in the app). The cards area still grows as cards appear.
+15. In Mission mode, tap a card to expand it: the full info, a larger image, the reply,
+    and the sources appear; tap again to collapse. Card images show in Mission mode
+    (a thumbnail when collapsed, larger when expanded).
+16. Mute: click the mic button (in the Mission mode HUD header, the menu bar, or the app
+    toolbar). Your own voice stops being transcribed while system audio and the screen
+    keep going; click again to unmute. The mute survives an automatic capture restart.
+17. The Translate switch is also in the Mission mode HUD header (the speech-bubble icon),
+    not just the full app.
 
 With simulated input (`swift run Mai`), the same flows work with typed lines: try a
 sushi line, a `Sato: ご意見をお願いできますか？` reference (a Japanese suggested reply

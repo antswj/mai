@@ -86,12 +86,27 @@ public final class RealEars: Ears, @unchecked Sendable {
         }
     }
 
+    // Mute the local microphone: the user's own voice is not captured or transcribed,
+    // while system audio and the screen keep going. Guarded; the audio callback and the
+    // UI toggle touch it from different threads. With no mic audio flowing, the mic VAD
+    // gate hangover-closes its Soniox stream, so muting also stops mic transcription cost.
+    private let muteLock = NSLock()
+    private var _micMuted = false
+    public var micMuted: Bool {
+        get { muteLock.withLock { _micMuted } }
+        set {
+            muteLock.withLock { _micMuted = newValue }
+            if newValue { onClearPartial?(.user) }   // drop any in-flight "You" partial
+        }
+    }
+
     // Accessors so the capture wiring (in another file) can reach the private state.
     func setClients(mic: SonioxClient, system: SonioxClient) { micClient = mic; systemClient = system }
     func setGates(mic: VadGatedSource?, system: VadGatedSource?) { micGate = mic; systemGate = system }
     func setAudioCapture(_ capture: AudioCapture) { audioCapture = capture }
     // Route audio through the VAD gate when present, else straight to the socket.
     func feedMic(_ data: Data) {
+        if muteLock.withLock({ _micMuted }) { return }   // muted: drop mic audio entirely
         noteCaptured()
         if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
     }

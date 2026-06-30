@@ -45,6 +45,13 @@ struct FullAppView: View {
                 Button(model.noteTaking ? "Stop Note-Taking" : "Start Note-Taking") { model.toggleNoteTaking() }
             }
             ToolbarItem {
+                Button { model.toggleMute() } label: {
+                    Label(model.micMuted ? "Unmute" : "Mute",
+                          systemImage: model.micMuted ? "mic.slash.fill" : "mic")
+                }
+                .help(model.micMuted ? "Unmute your microphone" : "Mute your microphone (system audio keeps recording)")
+            }
+            ToolbarItem {
                 Button(model.isPaused ? "Resume" : "Pause") { model.togglePause() }
             }
         }

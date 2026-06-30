@@ -1298,6 +1298,21 @@ do {
     check(FileManager.default.fileExists(atPath: folder.appendingPathComponent(export.docxFileName).path), "docx written")
 }
 
+section("Mic mute: muting clears the in-flight 'You' partial; unmuting does not")
+do {
+    let ears = RealEars(config: Config(), secrets: Secrets(values: [:]))
+    nonisolated(unsafe) var cleared: [SpeakerSource] = []
+    let lock = NSLock()
+    ears.onClearPartial = { src in lock.withLock { cleared.append(src) } }
+    check(!ears.micMuted, "starts unmuted")
+    ears.micMuted = true
+    check(ears.micMuted, "mute flag set")
+    check(lock.withLock { cleared } == [.user], "muting clears the live 'You' partial so it does not linger")
+    ears.micMuted = false
+    check(!ears.micMuted, "unmute flag cleared")
+    check(lock.withLock { cleared } == [.user], "unmuting does not clear anything new")
+}
+
 // Summary
 print("\n========================================")
 if failures.isEmpty {
