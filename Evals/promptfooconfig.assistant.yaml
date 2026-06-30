@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's meeting assistant prompt: it summarizes
+# what the meeting is about and identifies what the user themselves said, grounded
+# only in the transcript. Run: `promptfoo eval -c promptfooconfig.assistant.yaml`
+description: Mai meeting assistant (grounded summary, identifies the user's own words)
+
+prompts:
+  - file://assistant_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-sonnet-4-6
+    config:
+      max_tokens: 500
+      temperature: 0
+
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+
+tests: file://assistant_dataset.yaml

@@ -1,0 +1,34 @@
+# Sanitized sample meetings for the notes writer. The notes must contain only
+# content supported by the transcript and the noted items, never invented specifics.
+
+- vars:
+    interface: English
+    transcript: |
+      Sato: Let us finalize the launch checklist today.
+      You: I will prepare the design review by Friday.
+      Lee: We should confirm the venue booking this week.
+      Sato: Agreed. Lee owns the venue, I own the checklist.
+    noted: "- Circulate the agenda beforehand"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON notes are grounded ONLY in the transcript and the noted item: they
+        mention the launch checklist, the design review by Friday, the venue booking
+        and owners, and the agenda item. They invent NO numbers, dates, decisions, or
+        names not present above. The sections and summary are sensible and concise.
+
+- vars:
+    interface: English
+    transcript: |
+      Wang: The prototype is slower than we hoped on older laptops.
+      You: Let us profile it before optimizing anything.
+      Wang: I will gather timing data from three machines.
+    noted: "(none)"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON notes capture the performance concern on older laptops, the decision
+        to profile before optimizing, and the action to gather timing data from three
+        machines. Nothing beyond the transcript is added (no invented benchmarks).

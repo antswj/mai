@@ -32,6 +32,8 @@ cd Evals
 promptfoo eval -c promptfooconfig.yaml
 promptfoo eval -c promptfooconfig.drafter.yaml
 promptfoo eval -c promptfooconfig.router.yaml
+promptfoo eval -c promptfooconfig.assistant.yaml
+promptfoo eval -c promptfooconfig.notes.yaml
 ```
 
 View the last results in a browser:
@@ -76,3 +78,16 @@ The card brain is verified across the same three layers:
 - Voice-activity gating: the gate, frame accumulator, and pre-roll ring are pure
   logic unit-tested in `swift run MaiTests`, which also loads the bundled Silero
   model and runs real on-device ONNX inference. `swift run MaiSmoke vad` runs it live.
+
+## Step 3 final: assistant and notes
+
+- Assistant (`promptfooconfig.assistant.yaml` + `assistant_dataset.yaml`): grades the
+  real assistant prompt on summarizing what the meeting is about and identifying what
+  the user themselves said, grounded only in the transcript.
+- Notes writer (`promptfooconfig.notes.yaml` + `notes_dataset.yaml`): grades the real
+  notes-writer prompt on producing notes grounded only in the transcript and the
+  noted items, with no invented specifics.
+- The separate verification pass (dropping unsupported bullets), the generated title,
+  the .docx and .md write, the "note this down" merge, the info-cards-pause-while-
+  reply-cards-run gate, Keychain storage, the spend math, and the HUD show/hide and
+  pin math are all exercised deterministically in `swift run MaiTests`.
