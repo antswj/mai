@@ -1,6 +1,17 @@
 import SwiftUI
 import MaiCore
 
+// Report the natural content height of each HUD region so it can be sized to its
+// content (compact) and only scroll when it overflows.
+private struct TranscriptHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+private struct CardsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 // Mission mode: a calm, glassy, hovering heads-up display. Glass surface (functional
 // layer), a soft rim light and shadow for depth, a living glow as Mai's presence,
 // white legible vibrant text, and need-to-know density: the active transcript line or
@@ -18,29 +29,38 @@ struct MissionHUDView: View {
     // Chrome (header + paddings) subtracted from the panel's max height to get the
     // height available to the content areas.
     private let chrome: CGFloat = 72
+    // Measured natural heights of the transcript and cards content, so each region can
+    // be sized to its content (compact) and only scroll when it overflows.
+    @State private var transcriptNatural: CGFloat = 0
+    @State private var cardsNatural: CGFloat = 0
 
     var body: some View {
         let cards = visibleCards
         // Available content height, capped at the panel max (down to just above the Dock).
-        let content = max(140, model.hudMaxHeight - chrome)
-        let split = HUDLayout.split(availableHeight: Double(content), hasCards: !cards.isEmpty)
+        let maxContent = max(140, model.hudMaxHeight - chrome)
+        // Content-driven: each region is its natural height, capped so the HUD never
+        // exceeds the max and the cards never crowd out the transcript. Compact when
+        // short, grows with content, ~60/40 only once both overflow.
+        let h = HUDLayout.regionHeights(transcriptNatural: Double(transcriptNatural),
+                                        cardsNatural: Double(cardsNatural),
+                                        maxContent: Double(maxContent), hasCards: !cards.isEmpty)
 
         return GlassStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 header
                 if showAsk {
-                    ChatView(model: model, compact: true).frame(height: content)
+                    ChatView(model: model, compact: true).frame(height: maxContent)
                 } else {
-                    // Transcript on top (about 60 percent when cards are shown, full
-                    // height otherwise); cards below (about 40 percent), each scrolling.
-                    transcriptArea.frame(height: CGFloat(split.transcript))
+                    transcriptArea.frame(height: max(28, CGFloat(h.transcript)))
                     if !cards.isEmpty {
-                        cardsArea(cards).frame(height: CGFloat(split.cards))
+                        cardsArea(cards).frame(height: CGFloat(h.cards))
                     }
                 }
             }
             .padding(14)
             .frame(width: 364)
+            .animation(.easeInOut(duration: 0.22), value: h.transcript)
+            .animation(.easeInOut(duration: 0.22), value: h.cards)
             // Real Liquid Glass renders its own light-aware edge and adapts to whatever
             // is behind it (darkens over white, lightens over dark), so there is NO
             // manual stroke/border: a hand-drawn border is exactly the hard edge the
@@ -51,8 +71,10 @@ struct MissionHUDView: View {
         .padding(10)
     }
 
+    // Pinned cards first (they never auto-dismiss), then the flowing ones. The HUD shows
+    // pinned cards inline (no swipe carousel; that lives in the full app).
     private var visibleCards: [RichCard] {
-        Array(model.richItems.filter { !$0.suppressed }.prefix(8))
+        Array((model.pinnedCards + model.flowingCards).prefix(8))
     }
 
     private var header: some View {
@@ -94,10 +116,14 @@ struct MissionHUDView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { g in   // measure NATURAL content height for sizing
+                    Color.clear.preference(key: TranscriptHeightKey.self, value: g.size.height)
+                })
             }
             .onChange(of: model.liveLines.count) {
                 if let last = lines.last { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
+            .onPreferenceChange(TranscriptHeightKey.self) { transcriptNatural = $0 }
         }
     }
 
@@ -105,10 +131,18 @@ struct MissionHUDView: View {
     private func cardsArea(_ cards: [RichCard]) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(cards) { card in MiniCard(card: card, ruby: model.config.ruby) }
+                ForEach(cards) { card in
+                    MiniCard(card: card, ruby: model.config.ruby, pinned: model.isPinned(card.id)) {
+                        model.isPinned(card.id) ? model.unpin(card.id) : model.pin(card)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GeometryReader { g in
+                Color.clear.preference(key: CardsHeightKey.self, value: g.size.height)
+            })
         }
+        .onPreferenceChange(CardsHeightKey.self) { cardsNatural = $0 }
     }
 }
 
@@ -116,9 +150,21 @@ struct MissionHUDView: View {
 struct MiniCard: View {
     let card: RichCard
     var ruby: Bool
+    var pinned: Bool = false
+    var onTogglePin: (() -> Void)?
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(card.headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            HStack(spacing: 6) {
+                Text(card.headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Spacer()
+                if let onTogglePin {
+                    Button(action: onTogglePin) {
+                        Image(systemName: pinned ? "pin.fill" : "pin")
+                            .font(.caption2).foregroundStyle(pinned ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel(pinned ? "Unpin card" : "Pin card")
+                }
+            }
             if let info = card.info, !info.isEmpty {
                 Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(4)
             } else if card.isLoading {
