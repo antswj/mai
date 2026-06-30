@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's notes writer prompt: the write-up is
+# grounded only in the transcript and the noted items (no invented specifics) and is
+# sensible. The separate verification pass and the title are exercised deterministically
+# in `swift run MaiTests`. Run: `promptfoo eval -c promptfooconfig.notes.yaml`
+description: Mai meeting notes writer (grounded, transcript-supported)
+
+prompts:
+  - file://notes_writer_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-sonnet-4-6
+    config:
+      max_tokens: 700
+      temperature: 0
+
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+  assert:
+    - type: contains-json
+
+tests: file://notes_dataset.yaml

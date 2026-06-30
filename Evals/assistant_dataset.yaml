@@ -1,0 +1,44 @@
+# Sanitized sample meetings for the assistant. It must summarize what the meeting is
+# about and identify what the user (the "You" lines) said, grounded in the transcript.
+
+- vars:
+    interface: English
+    question: "What are they talking about, and what did I say?"
+    transcript: |
+      Sato: Let us lock the launch date for the new dashboard.
+      You: I think we should ship the week after the design review.
+      Lee: Marketing wants a week of lead time for the announcement.
+      Sato: Then the design review on Tuesday is the critical path.
+  assert:
+    - type: llm-rubric
+      value: >
+        The reply summarizes that the meeting is about scheduling the dashboard launch
+        (and the design review as the critical path), AND it clearly states that the
+        user proposed shipping the week after the design review. It does not invent
+        anything not in the transcript.
+
+- vars:
+    interface: English
+    question: "Did I commit to anything?"
+    transcript: |
+      Wang: Can someone own the vendor follow-up?
+      You: I will handle the vendor follow-up by Friday.
+      Wang: Great, thank you.
+  assert:
+    - type: llm-rubric
+      value: >
+        The reply states that the user committed to handling the vendor follow-up by
+        Friday, grounded in the transcript, and does not add unsupported commitments.
+
+- vars:
+    interface: English
+    question: "What is the meeting about?"
+    transcript: |
+      Mia: The Q3 numbers came in slightly ahead of plan.
+      You: Nice. Should we reinvest the upside into hiring?
+      Mia: Let us discuss headcount next week.
+  assert:
+    - type: llm-rubric
+      value: >
+        The reply summarizes that the meeting is about Q3 results being ahead of plan
+        and a possible reinvestment into hiring, grounded only in the transcript.
