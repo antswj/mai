@@ -1,0 +1,56 @@
+# The suggested reply must be in the language actually spoken for the utterance, not a
+# fixed setting. Each case states the spoken language and expects the reply in it. A
+# warranted reply should appear equally readily across languages.
+
+- vars:
+    spoken: English
+    interface: English
+    conversation: |
+      Sato: We need someone to own the rollout plan.
+      Sato: So, what do you think we should do?
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        warranted is true and the "spoken" reply is written in ENGLISH (the spoken
+        language), grounded in the conversation. It is not in Japanese or Chinese.
+
+- vars:
+    spoken: Japanese
+    interface: English
+    conversation: |
+      Sato: それでは、ご意見をお願いできますか？
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        warranted is true and the "spoken" reply is written in JAPANESE (the spoken
+        language), and "translation" is an English rendering. A Japanese request gets
+        a reply just as readily as an English one.
+
+- vars:
+    spoken: Chinese
+    interface: English
+    conversation: |
+      Wang: 你怎么看这个方案？
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        warranted is true and the "spoken" reply is written in CHINESE (the spoken
+        language), with an English "translation".
+
+- vars:
+    spoken: English
+    interface: English
+    conversation: |
+      Sato: 先ほどの件はありがとうございました。
+      You: Sure, happy to help.
+      Sato: Could you share your take on the timeline?
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        Even though earlier lines were Japanese, the spoken language for this turn is
+        English, so the "spoken" reply is in ENGLISH (the reply tracks the current
+        utterance, not the earlier language).

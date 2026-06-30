@@ -34,6 +34,7 @@ promptfoo eval -c promptfooconfig.drafter.yaml
 promptfoo eval -c promptfooconfig.router.yaml
 promptfoo eval -c promptfooconfig.assistant.yaml
 promptfoo eval -c promptfooconfig.notes.yaml
+promptfoo eval -c promptfooconfig.responder.yaml
 ```
 
 View the last results in a browser:
@@ -87,6 +88,13 @@ The card brain is verified across the same three layers:
 - Notes writer (`promptfooconfig.notes.yaml` + `notes_dataset.yaml`): grades the real
   notes-writer prompt on producing notes grounded only in the transcript and the
   noted items, with no invented specifics.
+- Responder (`promptfooconfig.responder.yaml` + `responder_dataset.yaml`): grades that
+  the suggested reply is written in the language actually spoken for the utterance
+  (English/Japanese/Chinese, tracked per utterance), with an interface-language
+  translation, and that a reply is offered equally readily across languages.
+- Router freshness (in `router_dataset.yaml`): a brand-new movie or a release-date
+  question routes to grounded search, not a model answer. The local freshness
+  guardrail that enforces this ahead of the model is tested in `swift run MaiTests`.
 - The separate verification pass (dropping unsupported bullets), the generated title,
   the .docx and .md write, the "note this down" merge, the info-cards-pause-while-
   reply-cards-run gate, Keychain storage, the spend math, and the HUD show/hide and

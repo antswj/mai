@@ -1,6 +1,30 @@
 # Labeled cases for the lookup router prompt. Trivial answers are decided locally
 # (not by this prompt), so the router chooses among entity / fresh / technical and
 # extracts a native-script entity name. Trilingual on purpose.
+#
+# Note: recency/freshness is also enforced by a local guardrail (Freshness) ahead of
+# this prompt, covered deterministically in `swift run MaiTests`. These cases confirm
+# the prompt itself also routes obviously-current things to fresh.
+
+- vars:
+    topic: "the new movie Toy Story 5"
+    conversation: "Jon: do you know the new movie Toy Story 5"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "fresh" and "needs_search" is true: a brand-new movie is
+        current and must be searched, not answered from model memory.
+
+- vars:
+    topic: "Vision Pro 2 release date"
+    conversation: "Mia: any idea on the Vision Pro 2 release date"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "fresh" and "needs_search" is true (a release date is
+        time-sensitive).
 
 - vars:
     topic: "who is Ada Lovelace"

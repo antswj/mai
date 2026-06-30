@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's responder prompt: the suggested reply is
+# written in the language actually spoken for the utterance (English in -> English
+# reply, Japanese -> Japanese, Chinese -> Chinese, and a mid-conversation switch
+# tracks per utterance), with an interface-language translation, and a reply is
+# offered equally readily across languages. The per-utterance language plumbing (from
+# the detected tag, not the floor config) is covered in `swift run MaiTests`.
+# Run: `promptfoo eval -c promptfooconfig.responder.yaml`
+description: Mai responder (reply language follows the spoken language)
+
+prompts:
+  - file://responder_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-sonnet-4-6
+    config:
+      max_tokens: 400
+      temperature: 0
+
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+  assert:
+    - type: contains-json
+
+tests: file://responder_dataset.yaml
