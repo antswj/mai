@@ -37,8 +37,10 @@ final class MissionHUDController {
     let panel: HUDPanel
     private let hosting: NSHostingView<AnyView>
     private let inset: CGFloat = 16
+    private weak var model: AppModel?
 
     init(model: AppModel) {
+        self.model = model
         hosting = NSHostingView(rootView: AnyView(MissionHUDView(model: model)))
         panel = HUDPanel(contentRect: NSRect(x: 0, y: 0, width: 384, height: 260))
         panel.contentView = hosting
@@ -61,11 +63,17 @@ final class MissionHUDController {
     // and Dock), recomputed each show so a display change is always honored. Pin math
     // is the unit-tested HUDLayout.topRightOrigin.
     func repin() {
+        let vf = activeScreen().visibleFrame
+        // The HUD can grow from the top inset down to just above the Dock (the visible
+        // frame already excludes the Dock and menu bar). Publish this max to the view so
+        // it sizes its 60/40 split and scroll areas to the full available height.
+        let maxH = HUDLayout.maxHeight(visibleFrameHeight: Double(vf.height), inset: Double(inset))
+        model?.hudMaxHeight = CGFloat(maxH)
+
         let size = hosting.fittingSize
         let w = size.width > 1 ? size.width : 384
-        let h = size.height > 1 ? size.height : 260
+        let h = min(CGFloat(maxH), size.height > 1 ? size.height : 260)   // grow up to the max, then scroll
         panel.setContentSize(NSSize(width: w, height: h))
-        let vf = activeScreen().visibleFrame
         let origin = HUDLayout.topRightOrigin(
             visibleFrame: ScreenRect(x: vf.minX, y: vf.minY, width: vf.width, height: vf.height),
             size: (width: Double(w), height: Double(h)), inset: Double(inset))

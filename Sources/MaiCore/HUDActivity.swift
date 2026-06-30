@@ -58,4 +58,22 @@ public enum HUDLayout {
         let y = f.y + f.height - size.height - inset
         return (x, y)
     }
+
+    // The maximum HUD height: from the top inset down to just above the Dock. The
+    // visible frame already excludes the Dock and the menu bar, so the usable height is
+    // its height minus the top inset and a small bottom gap. The HUD grows up to this
+    // and scrolls within it.
+    public static func maxHeight(visibleFrameHeight h: Double, inset: Double, bottomGap: Double = 8) -> Double {
+        max(120, h - inset - bottomGap)
+    }
+
+    // Split the available height into a transcript area (top) and a cards area (bottom)
+    // when both are shown: about 60 percent transcript over 40 percent cards. With no
+    // cards, the transcript takes the full height.
+    public static func split(availableHeight h: Double, hasCards: Bool, transcriptFraction: Double = 0.6)
+        -> (transcript: Double, cards: Double) {
+        guard hasCards else { return (h, 0) }
+        let t = (h * transcriptFraction).rounded()
+        return (t, h - t)
+    }
 }
