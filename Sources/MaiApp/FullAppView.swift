@@ -54,9 +54,23 @@ struct FullAppView: View {
 struct LiveAndCardsView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        HSplitView {
-            LiveTranscriptView(model: model).frame(minWidth: 300)
-            CardStreamView(model: model).frame(minWidth: 320)
+        VStack(spacing: 0) {
+            if model.headphonesTip {
+                HStack(spacing: 8) {
+                    Image(systemName: "headphones")
+                    Text("Tip: wearing headphones removes speaker-to-mic echo entirely, for the cleanest separation. Mai already filters the echo without them.")
+                        .font(.callout)
+                    Spacer()
+                    Button("Got It") { model.dismissHeadphonesTip() }
+                }
+                .padding(10)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .padding([.horizontal, .top], 8)
+            }
+            HSplitView {
+                LiveTranscriptView(model: model).frame(minWidth: 300)
+                CardStreamView(model: model).frame(minWidth: 320)
+            }
         }
     }
 }

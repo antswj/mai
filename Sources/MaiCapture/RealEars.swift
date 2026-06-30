@@ -15,12 +15,20 @@ public final class RealEars: Ears, @unchecked Sendable {
 
     // UI side-channel (set by the app; hops to the main actor inside the closure).
     public var onLive: (@Sendable (LiveTranscriptLine) -> Void)?
+    // Asks the app to clear the in-flight partial for a source (used when a mic echo
+    // final is dropped, so the already-shown "You" partial does not linger).
+    public var onClearPartial: (@Sendable (SpeakerSource) -> Void)?
     // The app wires this to the eyes' current active-speaker name, for naming.
     public var highlightProvider: (@Sendable () -> String?)?
     // Maps diarization clusters to real names; guarded because mic and system
     // Soniox callbacks can touch it concurrently.
     private var registry = SpeakerRegistry()
     private let registryLock = NSLock()
+    // Transcript-level echo suppression: drops a mic ("You") utterance that is a
+    // near-identical echo of a recent system-audio utterance (speaker voice picked up
+    // by the mic). Guarded; mic and system Soniox callbacks touch it concurrently.
+    private var echo = EchoSuppressor()
+    private let echoLock = NSLock()
 
     // Filled in the capture chunk.
     private var micClient: SonioxClient?
@@ -121,10 +129,26 @@ public final class RealEars: Ears, @unchecked Sendable {
 
     // Emit a finalized utterance to the engine and a final line to the UI.
     func emitFinal(_ segment: SonioxSegment, source: SpeakerSource) {
+        let now = Date()
+        // Echo suppression: record system (remote) finals; drop a mic (user) final that
+        // closely matches a recent system final (the speaker output picked up by the
+        // mic). Genuine user speech has no matching recent system line, so it is kept.
+        let isEcho: Bool = echoLock.withLock {
+            switch source {
+            case .remote: echo.noteSystem(segment.text, at: now); return false
+            case .user: return echo.isEcho(segment.text, at: now)
+            }
+        }
+        if isEcho {
+            // The echo already streamed as a live "You" partial before finalizing, so
+            // clear it; otherwise the dropped line lingers on screen.
+            onClearPartial?(source)
+            return
+        }
         let speaker = resolveName(source: source, cluster: segment.speakerLabel)
         // Carry Soniox's per-utterance detected language into the engine so a suggested
         // reply follows the language actually spoken, not the floor config.
-        let event = TranscriptEvent(text: segment.text, speaker: speaker, timestamp: Date(),
+        let event = TranscriptEvent(text: segment.text, speaker: speaker, timestamp: now,
                                     isFinal: true, language: segment.language)
         cont.yield(event)
         let lang = segment.language.flatMap { Language(rawValue: $0) }
