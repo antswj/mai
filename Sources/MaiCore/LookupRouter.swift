@@ -32,7 +32,15 @@ public struct LookupRouter: Sendable {
             return LookupPlan(route: .trivial, trivialAnswer: local, entity: nil,
                               query: topic, needsImage: false, needsSearch: false, spoken: spoken)
         }
-        // 2) One model call to classify and extract.
+        // 2) Local freshness guardrail: recency cues or a near-future year force grounded
+        // search FIRST, so a current thing (a new movie, a release date) can never be
+        // misrouted into a model answer. Checked against the topic and the surrounding
+        // utterance, since the cue ("new movie") often sits outside the extracted topic.
+        if Freshness.isFresh(topic + " " + window) {
+            return LookupPlan(route: .fresh, trivialAnswer: nil, entity: nil,
+                              query: topic, needsImage: false, needsSearch: true, spoken: spoken)
+        }
+        // 3) One model call to classify and extract.
         let user = """
         Interface language: \(Self.name(interface))
         What the user wondered about: "\(topic)"

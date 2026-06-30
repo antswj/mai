@@ -16,6 +16,15 @@ Shape:
   especially "query" for place/intent lookups (see below). Omit keys you do not need.
 If you cannot produce valid JSON, return {"triggers":[]}.
 
+CLASSIFY THE NEWEST UTTERANCE.
+Judge the LAST line of the window (the current utterance). The earlier lines are
+context only, to disambiguate it. Do not re-fire a trigger for something from an
+earlier line that was already on screen; fire for what was just said. Each new thing
+the user wonders about is its own trigger: make "span" and payload.query SPECIFIC to
+the current utterance (the actual thing asked about), never a generic placeholder, so
+two different questions in a row never look the same. If the newest line warrants
+nothing, return {"triggers":[]} even if an earlier line did.
+
 BE CONSERVATIVE. THIS IS THE MOST IMPORTANT RULE.
 Most lines in a normal conversation deserve NO trigger. Greetings, small talk,
 acknowledgements, scheduling chatter, filler, thinking out loud, and ordinary

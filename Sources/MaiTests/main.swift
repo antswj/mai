@@ -38,6 +38,10 @@ func makeRig(_ config: Config = Config(), places: PlacesProvider = StubPlaces())
 func tline(_ t: String, _ speaker: String? = nil) -> EngineInput {
     .transcript(TranscriptEvent(text: t, speaker: speaker, timestamp: Date(), isFinal: true))
 }
+// A transcript event carrying a Soniox-detected language tag, for the reply-language tests.
+func tlineLang(_ t: String, _ language: String, _ speaker: String? = nil) -> EngineInput {
+    .transcript(TranscriptEvent(text: t, speaker: speaker, timestamp: Date(), isFinal: true, language: language))
+}
 func sscreen(_ c: String) -> EngineInput {
     .screen(ScreenContentEvent(content: c, timestamp: Date(), isChange: true))
 }
@@ -516,12 +520,25 @@ do {
     check(card.imageURL == nil, "grounded cards carry no image (never fabricated)")
 }
 
-section("Enrichment: technical route (plain analysis, no web, no source)")
+section("Enrichment: technical route tries grounded search first (model is last resort)")
 do {
     let (card, _) = await enrich(.knowledge(topic: "how does a hash map work", window: "", spoken: .en, respond: false))
     check(card.route == .technical, "route is technical")
     check(card.info?.isEmpty == false, "explanation present")
-    check(card.source == nil && card.imageURL == nil, "no source or image for a no-search technical answer")
+    check(card.source != nil, "technical now searches first, so a real source is attached")
+    check(!card.unverified, "a sourced grounded answer is not labeled unverified")
+}
+
+section("Enrichment: model fallback only when both Wikipedia and search find nothing, labeled unverified")
+do {
+    let emptyEntity = StubEntityLookup { _, _, _ in nil }
+    let emptyGrounded = StubGroundedSearch { _, _ in GroundedResult(answer: "", sources: [], searchSuggestionHTML: nil) }
+    // A technical question where entity and grounded both return nothing -> model, unverified.
+    let (card, _) = await enrich(.knowledge(topic: "explain my private side project", window: "", spoken: .en, respond: false),
+                                 entity: emptyEntity, grounded: emptyGrounded)
+    check(card.info?.isEmpty == false, "the model answer is the last resort, so info is still present")
+    check(card.source == nil, "the unverified model answer carries NO source line")
+    check(card.unverified, "the model fallback is labeled unverified")
 }
 
 section("Enrichment: trivial route (instant local answer, no image/source)")
@@ -876,18 +893,24 @@ do {
     check(SpendMath.estimate(gated, rates: rates).transcription < e.transcription, "VAD silence gating lowers the transcription estimate")
 }
 
-section("HUD activity: show/hide decision and top-right pin math")
+section("HUD activity: rides through pauses, hides only after long idle")
 do {
-    func input(speaking: Bool = false, cards: Bool = false, summoned: Bool = false, pinned: Bool = false, app: Bool = false, paused: Bool = false) -> HUDActivityInput {
-        HUDActivityInput(speaking: speaking, hasActiveCards: cards, summoned: summoned, pinned: pinned, appWindowOpen: app, paused: paused)
+    func input(noteTaking: Bool = false, cards: Bool = false, since: Double = 999,
+               summoned: Bool = false, pinned: Bool = false, app: Bool = false, paused: Bool = false) -> HUDActivityInput {
+        HUDActivityInput(noteTaking: noteTaking, hasActiveCards: cards, secondsSinceActivity: since,
+                         idleHideSeconds: 45, summoned: summoned, pinned: pinned, appWindowOpen: app, paused: paused)
     }
-    check(HUDActivity.shouldShow(input(speaking: true)), "speech shows the HUD")
-    check(HUDActivity.shouldShow(input(cards: true)), "an active card shows the HUD")
-    check(!HUDActivity.shouldShow(input()), "idle (silence, no cards) hides the HUD")
-    check(HUDActivity.shouldShow(input(summoned: true)), "summon shows the HUD")
-    check(HUDActivity.shouldShow(input(pinned: true)), "pinned stays shown")
-    check(!HUDActivity.shouldShow(input(speaking: true, app: true)), "the full app window takes over")
-    check(!HUDActivity.shouldShow(input(paused: true)), "paused shows nothing")
+    check(HUDActivity.shouldShow(input(since: 1)), "recent speech shows the HUD")
+    check(HUDActivity.shouldShow(input(since: 8)), "a natural pause (8s, under the idle window) keeps the HUD up")
+    check(HUDActivity.shouldShow(input(since: 30)), "a long-ish pause (30s, still under 45s) keeps it up (no flapping)")
+    check(!HUDActivity.shouldShow(input(since: 60)), "sustained real idle (60s, past 45s) hides it")
+    check(HUDActivity.shouldShow(input(cards: true, since: 999)), "an active card keeps it up even when idle")
+    check(HUDActivity.shouldShow(input(noteTaking: true, since: 999)), "an active note-taking session keeps it up")
+    check(HUDActivity.shouldShow(input(since: 999, summoned: true)), "summon shows it")
+    check(HUDActivity.shouldShow(input(since: 999, pinned: true)), "pin-open never auto-hides")
+    check(!HUDActivity.shouldShow(input(since: 1, app: true)), "the full app window takes over")
+    check(!HUDActivity.shouldShow(input(since: 1, paused: true)), "paused shows nothing")
+    check(HUDActivity.shouldShow(input(since: 999, summoned: true, paused: true)), "but a summon overrides paused")
     let origin = HUDLayout.topRightOrigin(visibleFrame: ScreenRect(x: 0, y: 0, width: 1440, height: 900),
                                           size: (width: 380, height: 120), inset: 20)
     check(abs(origin.x - (1440 - 380 - 20)) < 1e-9, "pinned to the right edge minus width and inset")
@@ -936,6 +959,115 @@ do {
     check(Prompts.load("does-not-exist").isEmpty, "a missing prompt returns empty, not a crash")
     // The MaiCore resource bundle is locatable by the safe resolver.
     check(MaiResources.bundle("Mai_MaiCore") != nil, "MaiCore resource bundle located via the safe resolver")
+}
+
+// ============================ Fix pass: routing, freshness, reply language ============================
+
+section("Freshness guardrail: recency cues and near-future years force grounded search")
+do {
+    let now = Date(timeIntervalSince1970: 1_780_000_000)   // 2026, fixed for the year math
+    check(Freshness.isFresh("do you know the new movie Toy Story 5", now: now), "'new movie' is fresh")
+    check(Freshness.isFresh("Toy Story 5 release date", now: now), "'release date' is fresh")
+    check(Freshness.isFresh("the latest iPhone", now: now), "'latest' is fresh")
+    check(Freshness.isFresh("what is coming out in 2027", now: now), "a near-future year is fresh")
+    check(Freshness.isFresh("最新のニュース", now: now), "Japanese recency cue is fresh")
+    check(Freshness.isFresh("最新消息", now: now), "Chinese recency cue is fresh")
+    check(!Freshness.isFresh("how does a hash map work", now: now), "a timeless how-question is not fresh")
+    check(!Freshness.isFresh("the treaty signed in 1648", now: now), "an old year is not fresh")
+    // Word-boundary, not substring: "new" must not fire inside other words.
+    check(!Freshness.isFresh("who is Isaac Newton", now: now), "'Newton' does not count as 'new'")
+    check(!Freshness.isFresh("I knew that already", now: now), "'knew' does not count as 'new'")
+    check(!Freshness.isFresh("explain concurrent execution", now: now), "'concurrent' does not count as 'current'")
+}
+
+section("Router: freshness routes to grounded search before any model call")
+do {
+    let router = LookupRouter(llm: StubLLM(), model: "claude-haiku-4-5", interface: .en)
+    let plan = await router.plan(topic: "Toy Story 5", window: "do you know the new movie Toy Story 5", spoken: .en)
+    check(plan.route == .fresh && plan.needsSearch, "a brand-new movie routes to fresh, not the model")
+}
+
+section("Toy Story 5: a brand-new movie returns searched info with a source, never a model shrug")
+do {
+    let grounded = StubGroundedSearch { q, _ in
+        GroundedResult(answer: "Toy Story 5 is an upcoming Pixar film slated for a 2026 release.",
+                       sources: [RichSource(title: "Pixar", url: "https://pixar.example/toy-story-5")],
+                       searchSuggestionHTML: nil)
+    }
+    let (card, _) = await enrich(.knowledge(topic: "Toy Story 5", window: "do you know the new movie Toy Story 5", spoken: .en, respond: false),
+                                 grounded: grounded)
+    check(card.route == .fresh, "routed to fresh")
+    check(card.info?.contains("upcoming") == true, "real searched info, not a model shrug")
+    check(card.source?.url.contains("pixar") == true, "carries a real source")
+    check(!card.unverified, "a sourced answer is not labeled unverified")
+}
+
+section("Two different Japanese queries in a row each get their own fresh card (1.2)")
+do {
+    // The reported stale-result path is question/intent lookups. Drive two distinct
+    // Japanese intents and confirm two distinct resolved cards, not a reused result.
+    let rig = makeRichRig()
+    await rig.engine.process(tlineLang("マレーシアに行くんだ", "ja", "A"))
+    let first = await waitResolved(rig.sink)
+    check(first?.info?.contains("Southeast Asia") == true, "first Japanese query resolves its own entity (Malaysia)")
+    await rig.engine.process(tlineLang("プリンってどうやって作るの", "ja", "A"))
+    var second: RichCard?
+    for _ in 0..<200 {
+        if let c = rig.sink.all.first(where: { $0.pending.isEmpty && $0.id != first?.id && !$0.suppressed }) { second = c; break }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    check(second != nil, "the second Japanese query produces its own card, not a reuse")
+    check(second?.id != first?.id, "the two queries are distinct cards")
+    check(second?.headline != first?.headline, "keyed on the actual query text, so they do not collide")
+}
+
+section("Reply language follows the detected tag per utterance, not the floor config")
+do {
+    // Floor is Japanese, but the spoken language must win per utterance.
+    check(Engine.spokenLanguage(of: TranscriptEvent(text: "Sure, sounds good", speaker: nil, timestamp: Date(), isFinal: true, language: "en")) == .en,
+          "the detected tag (en) wins over floor")
+    check(Engine.spokenLanguage(of: TranscriptEvent(text: "いいですね", speaker: nil, timestamp: Date(), isFinal: true, language: "ja")) == .ja,
+          "the detected tag (ja) is used")
+    // Hybrid fallback when there is no tag (simulated input): detect from the text.
+    check(Engine.spokenLanguage(of: TranscriptEvent(text: "what do you think", speaker: nil, timestamp: Date(), isFinal: true)) == .en,
+          "no tag, English text -> en")
+    check(Engine.spokenLanguage(of: TranscriptEvent(text: "どう思いますか", speaker: nil, timestamp: Date(), isFinal: true)) == .ja,
+          "no tag, Japanese text -> ja")
+}
+
+section("Reply: English in -> English reply; Japanese in -> Japanese reply with readings (floor=ja)")
+do {
+    // Floor set to Japanese on purpose; the reply must still follow the spoken language.
+    let rig = makeRichRig(Config(floorLanguage: .ja, meetingMode: true, responseEnabled: true))
+    await rig.engine.process(tlineLang("So what do you think about the plan?", "en", "Sato"))
+    let enCard = await waitResolved(rig.sink)
+    check(enCard?.response?.language == .en, "English utterance yields an English reply, not Japanese from floor")
+
+    let rig2 = makeRichRig(Config(floorLanguage: .ja, meetingMode: true, responseEnabled: true))
+    await rig2.engine.process(tlineLang("それでは、ご意見をお願いできますか？", "ja", "Sato"))
+    let jaCard = await waitResolved(rig2.sink)
+    check(jaCard?.response?.language == .ja, "Japanese utterance yields a Japanese reply")
+    if let spoken = jaCard?.response?.spoken {
+        let units = Readings.units(spoken, language: .ja)
+        check(units.contains { ($0.reading ?? "").contains("かく") }, "furigana available over the Japanese reply")
+    } else { check(false, "Japanese reply text present") }
+}
+
+section("Reply: a mid-conversation language switch is tracked per utterance")
+do {
+    let rig = makeRichRig(Config(floorLanguage: .ja, meetingMode: true, responseEnabled: true))
+    // Japanese turn first.
+    await rig.engine.process(tlineLang("どう思いますか？", "ja", "Sato"))
+    let first = await waitResolved(rig.sink)
+    check(first?.response?.language == .ja, "first (Japanese) reply is Japanese")
+    // Speaker switches to English (same kind of cue, different language).
+    await rig.engine.process(tlineLang("Actually, what do you think about it?", "en", "Sato"))
+    var switched: RichCard?
+    for _ in 0..<200 {
+        if let c = rig.sink.all.first(where: { $0.response?.language == .en && $0.pending.isEmpty }) { switched = c; break }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    check(switched?.response?.language == .en, "after switching to English, the reply switches to English")
 }
 
 // Summary

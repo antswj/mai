@@ -47,13 +47,27 @@ final class Surfacing {
             return PreDecision(surface: false, tier: tier, score: score,
                                reason: String(format: "below threshold (%.2f < %.2f)", score, threshold))
         }
-        let key = "\(trigger.type.rawValue)|\(headline.lowercased())"
+        // Group on the SPECIFIC trigger content (the actual query/span), not the display
+        // headline. The headline can be a constant (for example every reference card is
+        // titled "Suggested reply"), which would wrongly collapse two distinct utterances
+        // into one and suppress the second; keying on the query keeps each one its own.
+        let key = Self.groupingKey(trigger: trigger, headline: headline)
         if let last = lastSurfaced[key], now.timeIntervalSince(last) < groupingSeconds {
             return PreDecision(surface: false, tier: tier, score: score,
                                reason: "grouped with a recent card on the same topic")
         }
         lastSurfaced[key] = now
         return PreDecision(surface: true, tier: tier, score: score, reason: "")
+    }
+
+    static func groupingKey(trigger: Trigger, headline: String) -> String {
+        func norm(_ s: String) -> String {
+            s.lowercased().split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).joined(separator: " ")
+        }
+        let q = norm(trigger.payload["query"] ?? "")
+        let span = norm(trigger.span)
+        let topic = !q.isEmpty ? q : (!span.isEmpty ? span : norm(headline))
+        return "\(trigger.type.rawValue)|\(topic)"
     }
 
     func evaluate(card: Card, trigger: Trigger, now: Date) -> Decision {

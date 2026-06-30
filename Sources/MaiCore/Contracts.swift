@@ -16,8 +16,14 @@ public struct TranscriptEvent: Codable, Sendable {
     public let speaker: String?
     public let timestamp: Date
     public let isFinal: Bool
-    public init(text: String, speaker: String?, timestamp: Date, isFinal: Bool) {
-        self.text = text; self.speaker = speaker; self.timestamp = timestamp; self.isFinal = isFinal
+    // The per-utterance language Soniox identified ("en"/"ja"/"zh"), when known. Added
+    // as an optional with a default so the step-1 contract stays source-compatible:
+    // every existing call site and Ears implementer is unaffected, and it decodes nil
+    // when absent. Used so a suggested reply follows the language actually spoken.
+    public let language: String?
+    public init(text: String, speaker: String?, timestamp: Date, isFinal: Bool, language: String? = nil) {
+        self.text = text; self.speaker = speaker; self.timestamp = timestamp
+        self.isFinal = isFinal; self.language = language
     }
 }
 

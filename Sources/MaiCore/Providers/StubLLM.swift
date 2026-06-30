@@ -114,12 +114,14 @@ public struct StubLLM: LLMProvider {
         if has(["malaysia", "マレーシア", "马来西亚"]) {
             return triggers([["type": "intent", "span": "going to Malaysia", "reason": "travel; a fun fact would delight", "confidence": 0.7, "payload": ["query": "Malaysia"]]])
         }
-        // reference (asks the user to respond)
+        // reference (asks the user to respond). Per the classifier contract, the span is
+        // the verbatim current line and the query is specific to this utterance, so two
+        // different requests in a row do not collide on a coarse cooldown key.
         if has(["your turn", "what do you think", "answer that", "どう思います", "お願いできます", "ご意見", "你怎么看", "你来回答", "你来说"]) {
             let speaker = speakerOfLine(containing: ["your turn", "what do you think", "どう思います", "お願いできます", "ご意見", "你怎么看", "你来回答", "你来说"], in: window)
-            var payload: [String: Any] = ["query": "respond"]
+            var payload: [String: Any] = ["query": window]
             if let speaker { payload["speaker"] = speaker }
-            return triggers([["type": "reference", "span": "asked to respond", "reason": "user is asked to reply", "confidence": 0.85, "payload": payload]])
+            return triggers([["type": "reference", "span": window, "reason": "user is asked to reply", "confidence": 0.85, "payload": payload]])
         }
         return "{\"triggers\":[]}"
     }

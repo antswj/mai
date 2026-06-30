@@ -186,7 +186,11 @@ public actor Engine {
             return
         }
 
-        let spoken = ScriptDetect.language(of: topic.isEmpty ? context.window() : topic)
+        // The language to reply in follows the language actually spoken for THIS
+        // utterance: Soniox's detected tag when present, else detected from the text
+        // (covers simulated input). The floor config is NOT used here; it applies only
+        // to a prepared line where there is no spoken utterance to follow.
+        let spoken = Self.spokenLanguage(of: event)
         let (route, request, pending): (LookupRoute, LookupRequest, Set<String>)
         switch trigger.type {
         case .place:
@@ -195,7 +199,7 @@ public actor Engine {
             pending = [RichCard.Part.info.rawValue]
         case .reference:
             route = .preparedReply
-            request = .preparedReply(context: context.window(), asker: trigger.payload["speaker"], spoken: config.floorLanguage)
+            request = .preparedReply(context: context.window(), asker: trigger.payload["speaker"], spoken: spoken)
             pending = [RichCard.Part.response.rawValue]
         case .question, .intent:
             route = .pending
@@ -211,13 +215,23 @@ public actor Engine {
                                 pending: pending, latencyMs: latencyMs)
         richSink?.upsert(skeleton)   // instant first paint, before any lookup
 
-        let key = "\(trigger.type.rawValue)|\(headline.lowercased())"
+        // Supersede on the SPECIFIC trigger content (same key as the grouping dedup),
+        // not the display headline, so two distinct topics never cancel each other's
+        // enrichment (the reference headline, for one, is a constant).
+        let key = Surfacing.groupingKey(trigger: trigger, headline: headline)
         Task { [weak self] in
             guard let self else { return }
             await enricher.submit(skeleton, request: request, supersedeKey: key) { final in
                 Task { await self.persistRich(final) }
             }
         }
+    }
+
+    // Per-utterance spoken language: the detected tag from capture, else detected from
+    // the text. Never the floor config (which is for prepared lines only).
+    public static func spokenLanguage(of event: TranscriptEvent) -> Language {
+        if let tag = event.language, let l = Language(rawValue: tag) { return l }
+        return ScriptDetect.language(of: event.text)
     }
 
     private func headline(for trigger: Trigger, topic: String) -> String {
