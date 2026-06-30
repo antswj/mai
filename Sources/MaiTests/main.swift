@@ -45,6 +45,10 @@ func tlineLang(_ t: String, _ language: String, _ speaker: String? = nil) -> Eng
 func sscreen(_ c: String) -> EngineInput {
     .screen(ScreenContentEvent(content: c, timestamp: Date(), isChange: true))
 }
+// A screen change carrying a salient subject (drives the proactive screen-card path).
+func sscreenSubject(_ c: String, _ subject: String) -> EngineInput {
+    .screen(ScreenContentEvent(content: c, timestamp: Date(), isChange: true, subject: subject))
+}
 
 // A synthetic float32 buffer (default 48kHz stereo) for exercising PCM16Converter.
 func makeFloatBuffer(sampleRate: Double = 48000, channels: AVAudioChannelCount = 2,
@@ -1068,6 +1072,100 @@ do {
         try? await Task.sleep(nanoseconds: 10_000_000)
     }
     check(switched?.response?.language == .en, "after switching to English, the reply switches to English")
+}
+
+// ============================ Fix pass 2: echo, screen cards, HUD layout ============================
+
+section("Echo suppression: drops mic echo of system audio, keeps genuine user speech")
+do {
+    let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+    var sup = EchoSuppressor()
+    // A remote participant says a full sentence (system audio).
+    sup.noteSystem("Let us review the third quarter revenue numbers now", at: t0)
+    // The mic picks it back up a moment later, near-identical -> echo, dropped.
+    check(sup.isEcho("Let us review the third quarter revenue numbers now", at: t0.addingTimeInterval(0.6)),
+          "a long near-identical mic line just after a system line is echo")
+    // The same system line cannot suppress a second later mic line (consume-once).
+    check(!sup.isEcho("Let us review the third quarter revenue numbers now", at: t0.addingTimeInterval(1.2)),
+          "consume-once: one system line suppresses at most one mic line")
+
+    // Genuine short backchannel is NEVER dropped, even after a matching remote one.
+    var sup2 = EchoSuppressor()
+    sup2.noteSystem("yeah", at: t0)
+    check(!sup2.isEcho("yeah", at: t0.addingTimeInterval(0.5)), "short 'yeah' is kept (length floor)")
+
+    // CJK echo (no spaces) is dropped when long enough.
+    var sup3 = EchoSuppressor()
+    sup3.noteSystem("来月の予算会議について話し合いましょう", at: t0)
+    check(sup3.isEcho("来月の予算会議について話し合いましょう", at: t0.addingTimeInterval(0.5)),
+          "a long CJK echo is dropped")
+
+    // The user's own distinct reply is kept (no matching recent system line).
+    var sup4 = EchoSuppressor()
+    sup4.noteSystem("What do you think about the new timeline proposal", at: t0)
+    check(!sup4.isEcho("I think we should push it back by two weeks honestly", at: t0.addingTimeInterval(1)),
+          "a distinct user reply is kept, not treated as echo")
+
+    // Outside the time window, a match is not treated as echo (stale).
+    var sup5 = EchoSuppressor()
+    sup5.noteSystem("Let us review the third quarter revenue numbers now", at: t0)
+    check(!sup5.isEcho("Let us review the third quarter revenue numbers now", at: t0.addingTimeInterval(30)),
+          "a match outside the window is not echo")
+
+    // Pure similarity helpers.
+    check(EchoSuppressor.similarity("hello world", "hello world") == 1, "identical text -> 1.0")
+    check(EchoSuppressor.similarity("hello world", "completely different") < 0.3, "different text -> low")
+}
+
+section("Screen card: a slide subject produces a useful sourced card, not a description")
+do {
+    let rig = makeRichRig()
+    // A presentation slide, no verbal cue. The vision read carries the salient subject.
+    await rig.engine.process(sscreenSubject("A slide about a country in Southeast Asia.", "Malaysia"))
+    let card = await waitResolved(rig.sink)
+    check(card?.trigger == .screenReference, "the proactive screen card is a screenReference card")
+    check(card?.route == .entity, "the subject is run through the lookup router (entity), not described")
+    check(card?.info?.contains("Southeast Asia") == true, "useful sourced info about the subject")
+    check(card?.source?.url.contains("wikipedia.org") == true, "carries a real source")
+    check(card?.info?.contains("slide about") != true, "not a description of the slide")
+}
+
+section("Screen card: a Japanese slide subject resolves into the interface language")
+do {
+    let rig = makeRichRig(Config(interfaceLanguage: .en))
+    await rig.engine.process(sscreenSubject("寿司の歴史についてのスライド。", "寿司"))
+    let card = await waitResolved(rig.sink)
+    check(card?.info?.contains("Japanese dish") == true, "a Japanese slide subject resolves to an English (interface) summary")
+    check(card?.source?.url.contains("/Sushi") == true, "cross-language resolved to the English article")
+}
+
+section("Screen card: same subject does not refire; no subject does not proactively fire")
+do {
+    let rig = makeRichRig()
+    await rig.engine.process(sscreenSubject("A slide about a country.", "Malaysia"))
+    _ = await waitResolved(rig.sink)
+    let countAfterFirst = rig.sink.all.filter { !$0.suppressed }.count
+    await rig.engine.process(sscreenSubject("Same slide still up.", "Malaysia"))
+    try? await Task.sleep(nanoseconds: 250_000_000)
+    check(rig.sink.all.filter { !$0.suppressed }.count == countAfterFirst, "same subject within the window does not refire")
+    // A screen change with no identifiable subject does not proactively surface a card.
+    let rig2 = makeRichRig()
+    await rig2.engine.process(sscreen("Just a desktop, nothing to look up."))
+    try? await Task.sleep(nanoseconds: 250_000_000)
+    check(rig2.sink.all.filter { !$0.suppressed }.isEmpty, "no subject -> no proactive screen card")
+}
+
+section("HUD layout: full height down to the Dock, and the 60/40 split")
+do {
+    // Max height is the visible-frame height minus the top inset and a small bottom gap.
+    let maxH = HUDLayout.maxHeight(visibleFrameHeight: 900, inset: 16)
+    check(abs(maxH - (900 - 16 - 8)) < 1e-9, "max height reaches from the top inset to just above the Dock")
+    // With cards, transcript is about 60 percent over 40 percent cards.
+    let split = HUDLayout.split(availableHeight: 800, hasCards: true)
+    check(abs(split.transcript - 480) < 1.0 && abs(split.cards - 320) < 1.0, "about 60/40 transcript over cards")
+    // With no cards, the transcript uses the full height.
+    let full = HUDLayout.split(availableHeight: 800, hasCards: false)
+    check(full.transcript == 800 && full.cards == 0, "no cards -> transcript uses the full height")
 }
 
 // Summary

@@ -265,6 +265,17 @@ With real capture (`open Mai.app`, permissions granted):
    Watch the processing state (reviewing, verifying, titling, saving), then open the
    saved `.docx` and `.md` from your chosen folder. The meeting appears in the list.
 9. Check the menu bar pause and the **Spend** view (it reflects savings during silence).
+10. With audio playing through the speakers (no headphones), have a remote participant
+    talk: confirm their speech shows once, as the real speaker, not doubled as "You".
+    When you speak, it still shows as "You". (Headphones remove the echo at the source;
+    Mai filters it without them.)
+11. Share a slide deck and advance a slide: confirm a useful, sourced card appears
+    about the slide's subject (facts, a breakdown, figures), in your interface language,
+    not a description, and a new slide produces a new card. A Japanese or Chinese slide
+    works the same, the card coming back in the interface language.
+12. Confirm the HUD extends down to just above the Dock, showing as much transcript as
+    fits, and that when a card is present it settles into roughly 60 percent transcript
+    over 40 percent cards, each scrolling on its own.
 
 With simulated input (`swift run Mai`), the same flows work with typed lines: try a
 sushi line, a `Sato: ご意見をお願いできますか？` reference (a Japanese suggested reply
