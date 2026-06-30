@@ -28,12 +28,12 @@ struct MissionHUDView: View {
             }
             .padding(14)
             .frame(width: 364)
+            // Real Liquid Glass renders its own light-aware edge and adapts to whatever
+            // is behind it (darkens over white, lightens over dark), so there is NO
+            // manual stroke/border: a hand-drawn border is exactly the hard edge the
+            // glass is meant to avoid. The shadow alone gives the hovering depth.
             .functionalGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 1)   // subtle rim light
-            )
-            .shadow(color: .black.opacity(0.28), radius: 20, y: 10)     // hovering depth
+            .shadow(color: .black.opacity(0.28), radius: 20, y: 10)
         }
         .padding(10)
     }

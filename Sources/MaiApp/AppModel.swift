@@ -59,6 +59,9 @@ final class AppModel: ObservableObject {
     @Published var onboardingComplete: Bool
     @Published var keyPresence: [String: Bool] = [:]   // which known keys are set
     private(set) var summonedAt = Date.distantPast
+    // Last time anything happened (a partial line, a final line, or a card). Drives the
+    // HUD idle timer so it rides through the natural pauses of a conversation.
+    private(set) var lastActivityAt = Date()
 
     let rates = UsageRates()
     private var assistant: AssistantProvider!
@@ -185,6 +188,7 @@ final class AppModel: ObservableObject {
     // Upsert a rich card by id: first emit inserts the skeleton (newest first), later
     // emits update it in place as enrichment parts resolve.
     private func upsertRich(_ card: RichCard) {
+        lastActivityAt = Date()   // a surfacing card counts as activity
         if let idx = richItems.firstIndex(where: { $0.id == card.id }) {
             richItems[idx] = card
         } else {
@@ -361,6 +365,7 @@ final class AppModel: ObservableObject {
 
     private func ingestLive(_ line: LiveTranscriptLine) {
         guard !isPaused else { return }
+        lastActivityAt = Date()   // any speech, even a mid-sentence partial, is activity
         if line.isFinal {
             // Drop the in-flight partial for this source, append the settled line.
             liveLines.removeAll { $0.id == partialID(line.source) }
@@ -696,12 +701,12 @@ final class AppModel: ObservableObject {
     // The pure HUD show/hide decision, evaluated from current app state. The AppDelegate
     // polls this to slide the panel in and out.
     var shouldShowHUD: Bool {
-        let speaking = liveLines.contains { $0.id.hasPrefix("live-") && !$0.text.isEmpty }
         let hasCards = richItems.contains { !$0.suppressed && Date().timeIntervalSince($0.timestamp) < 30 }
         let summoned = chatOpen || Date().timeIntervalSince(summonedAt) < 8
         return HUDActivity.shouldShow(HUDActivityInput(
-            speaking: speaking, hasActiveCards: hasCards, summoned: summoned,
-            pinned: missionPinned, appWindowOpen: appWindowOpen, paused: isPaused))
+            noteTaking: noteTaking, hasActiveCards: hasCards,
+            secondsSinceActivity: Date().timeIntervalSince(lastActivityAt),
+            summoned: summoned, pinned: missionPinned, appWindowOpen: appWindowOpen, paused: isPaused))
     }
 }
 
