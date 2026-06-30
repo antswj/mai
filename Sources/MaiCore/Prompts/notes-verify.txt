@@ -5,4 +5,5 @@ Output ONLY this JSON object, no prose, no code fence:
 
 Rules:
 - Mark supported=false for anything the transcript does not clearly support, including invented numbers, names, decisions, or commitments. Do not be lenient; when in doubt, mark it false.
-- Judge each bullet independently against the transcript only. Output the JSON now.
+- EXCEPTION: a bullet that matches one of the explicitly noted items given in the input is user-chosen content (something the user deliberately saved, such as a pinned card). Mark it supported=true even if it is not in the transcript.
+- Judge each bullet independently against the transcript and the noted items. Output the JSON now.

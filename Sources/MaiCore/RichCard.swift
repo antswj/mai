@@ -112,6 +112,16 @@ public struct RichCard: Sendable, Identifiable, Equatable {
     public var isLoading: Bool { !pending.isEmpty }
     public func isPending(_ part: Part) -> Bool { pending.contains(part.rawValue) }
 
+    // One concise line for the meeting-notes export when a pinned card is marked: the
+    // headline, the answer, and a source when present. Kept here so it is shared by the
+    // app and testable.
+    public func noteLine() -> String {
+        var s = headline
+        if let info, !info.isEmpty { s += ": \(info)" }
+        if let source { s += " (source: \(source.url))" }
+        return s
+    }
+
     // Map the resolved RichCard down to the step-1 Card for the memory store and the
     // Face contract. Keeps a single source of truth (the RichCard stream) while the
     // store and any Card-based consumer still get populated on completion.

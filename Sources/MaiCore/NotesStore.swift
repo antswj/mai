@@ -55,11 +55,15 @@ public actor NotesStore {
     // Run the write-up pipeline. `onStage` reports the visible processing state.
     // Returns the export (also written to `folder` when provided), or nil if nothing
     // was captured.
-    public func stop(now: Date, folder: URL?, onStage: @Sendable (Stage) -> Void = { _ in }) async -> MeetingExport? {
+    public func stop(now: Date, folder: URL?, extraNoted: [String] = [],
+                     onStage: @Sendable (Stage) -> Void = { _ in }) async -> MeetingExport? {
         active = false
         let started = startedAt ?? now
         let captured = lines
-        let notedItems = noted
+        // Merge extra noted items (for example pinned cards the user marked) at the TOP,
+        // before BOTH the write-up and the verification pass read the noted list, so the
+        // card content is written in AND treated as supported (not dropped by verify).
+        let notedItems = noted + extraNoted.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !captured.isEmpty || !notedItems.isEmpty else { return nil }
 
         onStage(.reviewing)
