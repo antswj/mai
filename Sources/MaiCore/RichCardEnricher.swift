@@ -153,6 +153,10 @@ public actor RichCardEnricher {
         // Sourced is preferred, not required; one source (or none, for a plain
         // knowledge answer) is fine. Nothing is invented: a plain answer simply
         // carries no source line.
+        // The model answer is a TRUE last resort everywhere: every non-trivial route
+        // tries a real, sourced lookup first (Wikipedia for an entity, grounded web
+        // search otherwise) and only falls to the model when both find nothing, marked
+        // unverified with no source line.
         switch plan.route {
         case .entity:
             let term = plan.entity ?? topic
@@ -167,27 +171,26 @@ public actor RichCardEnricher {
             let grounded = await groundedContent(query: plan.query)
             if grounded.info != nil { return grounded }
             return await explainContent(topic: topic, window: window)
-        case .fresh:
+        case .fresh, .technical:
+            // Both go to grounded web search first; the model is the fallback only when
+            // search returns nothing. (Technical no longer short-circuits to the model.)
             let grounded = await groundedContent(query: plan.query)
             if grounded.info != nil { return grounded }
             return await explainContent(topic: topic, window: window)
-        case .technical:
-            if plan.needsSearch {
-                let grounded = await groundedContent(query: plan.query)
-                if grounded.info != nil { return grounded }
-            }
-            return await explainContent(topic: topic, window: window)
         default:
+            let grounded = await groundedContent(query: plan.query)
+            if grounded.info != nil { return grounded }
             return await explainContent(topic: topic, window: window)
         }
     }
 
-    // Last-resort content: the model's own general knowledge, no web, no source.
+    // Last-resort content: the model's own general knowledge, no web, no source. Marked
+    // unverified so the card is labeled and shows no source line.
     private nonisolated func explainContent(topic: String, window: String) async -> ContentOutcome {
         let answer: String? = (await withTimeoutOrNil(seconds: config.onlineCapSeconds) { [self] in
             try await explain(topic: topic, window: window)
         }) ?? nil
-        return ContentOutcome(info: answer, image: nil, source: nil, html: nil, action: nil)
+        return ContentOutcome(info: answer, image: nil, source: nil, html: nil, action: nil, unverified: answer != nil)
     }
 
     private nonisolated func groundedContent(query: String) async -> ContentOutcome {
@@ -281,9 +284,14 @@ public actor RichCardEnricher {
         """
         guard let raw = try? await withTimeout(seconds: config.onlineCapSeconds, { [llm, config] in
             try await llm.complete(system: Prompts.responder, user: user, model: config.drafterModel)
-        }), let obj = JSONExtract.decodeObject(raw), (obj["warranted"] as? Bool) == true else { return nil }
+        }), let obj = JSONExtract.decodeObject(raw) else {
+            Self.logReply(spoken: spoken, warranted: nil); return nil
+        }
+        let warranted = (obj["warranted"] as? Bool) == true
+        guard warranted else { Self.logReply(spoken: spoken, warranted: false); return nil }
         let spokenText = (obj["spoken"] as? String) ?? ""
-        guard !spokenText.isEmpty else { return nil }
+        guard !spokenText.isEmpty else { Self.logReply(spoken: spoken, warranted: true); return nil }
+        Self.logReply(spoken: spoken, warranted: true)
         return RichResponse(spoken: spokenText, translation: (obj["translation"] as? String) ?? "",
                             language: spoken, rationale: (obj["rationale"] as? String).flatMap { $0.isEmpty ? nil : $0 })
     }
@@ -299,7 +307,7 @@ public actor RichCardEnricher {
             if let html = c.html { card.searchSuggestionHTML = html }
             if let action = c.action { card.action = action }
             if let resp = c.response { card.response = resp }
-            if let info = c.info { card.info = info }
+            if let info = c.info { card.info = info; card.unverified = c.unverified }
             else if !produced(c) && card.info == nil && card.response == nil {
                 // The content genuinely returned nothing: resolve to an honest line,
                 // never a fabricated answer.
@@ -329,16 +337,23 @@ public actor RichCardEnricher {
             p.insert(RichCard.Part.info.rawValue)
             if plan.needsImage { p.insert(RichCard.Part.image.rawValue) }
             p.insert(RichCard.Part.source.rawValue)
-        case .fresh:
+        case .fresh, .technical:
+            // Both try grounded search, which can return a source.
             p.insert(RichCard.Part.info.rawValue); p.insert(RichCard.Part.source.rawValue)
-        case .technical:
-            p.insert(RichCard.Part.info.rawValue)
-            if plan.needsSearch { p.insert(RichCard.Part.source.rawValue) }
         default:
             p.insert(RichCard.Part.info.rawValue)
         }
         if respond { p.insert(RichCard.Part.response.rawValue) }
         return p
+    }
+
+    // Diagnostic for the reply path: which spoken language was used and whether the
+    // responder judged a reply warranted. Set MAI_DEBUG_REPLY=1 to see it; this is how
+    // to observe why a given (e.g. Japanese) utterance did or did not get a reply.
+    nonisolated static func logReply(spoken: Language, warranted: Bool?) {
+        guard ProcessInfo.processInfo.environment["MAI_DEBUG_REPLY"] == "1" else { return }
+        let w = warranted.map { $0 ? "warranted" : "declined" } ?? "no-response"
+        FileHandle.standardError.write(Data("Mai reply: spoken=\(spoken.rawValue) -> \(w)\n".utf8))
     }
 
     // MARK: - Small helpers
@@ -370,10 +385,11 @@ struct ContentOutcome: Sendable {
     var html: String?
     var action: Action?
     var response: RichResponse?
+    var unverified: Bool   // model fallback with no source; the card is labeled
     init(info: String?, image: String?, source: RichSource?, html: String?, action: Action?,
-         sources: [RichSource] = [], response: RichResponse? = nil) {
+         sources: [RichSource] = [], response: RichResponse? = nil, unverified: Bool = false) {
         self.info = info; self.image = image; self.source = source; self.html = html
-        self.action = action; self.sources = sources; self.response = response
+        self.action = action; self.sources = sources; self.response = response; self.unverified = unverified
     }
 }
 

@@ -122,7 +122,10 @@ public final class RealEars: Ears, @unchecked Sendable {
     // Emit a finalized utterance to the engine and a final line to the UI.
     func emitFinal(_ segment: SonioxSegment, source: SpeakerSource) {
         let speaker = resolveName(source: source, cluster: segment.speakerLabel)
-        let event = TranscriptEvent(text: segment.text, speaker: speaker, timestamp: Date(), isFinal: true)
+        // Carry Soniox's per-utterance detected language into the engine so a suggested
+        // reply follows the language actually spoken, not the floor config.
+        let event = TranscriptEvent(text: segment.text, speaker: speaker, timestamp: Date(),
+                                    isFinal: true, language: segment.language)
         cont.yield(event)
         let lang = segment.language.flatMap { Language(rawValue: $0) }
         onLive?(LiveTranscriptLine(id: UUID().uuidString, speaker: speaker, source: source,

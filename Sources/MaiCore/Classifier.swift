@@ -63,18 +63,37 @@ actor Classifier {
             guard enabled.contains(t.type) else { continue }
             let key = cooldownKey(t)
             if let last = recentlyFired[key], now.timeIntervalSince(last) < cooldownSeconds {
+                Self.logTrigger(t, key: key, suppressed: true)
                 continue // still cooling down; do not re-emit
             }
             recentlyFired[key] = now
+            Self.logTrigger(t, key: key, suppressed: false)
             result.append(t)
         }
         return result
     }
 
+    // Cooldown/dedup key keyed on the ACTUAL normalized query text (the specific thing
+    // asked about), so two different queries never collide. Prefers payload.query (the
+    // model's specific topic); falls back to the verbatim span. Whitespace-normalized.
     private func cooldownKey(_ t: Trigger) -> String {
-        let span = t.span.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let q = (t.payload["query"] ?? "").lowercased()
-        return "\(t.type.rawValue)|\(span)|\(q)"
+        func norm(_ s: String) -> String {
+            s.lowercased().split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+                .joined(separator: " ")
+        }
+        let q = norm(t.payload["query"] ?? "")
+        let span = norm(t.span)
+        let topic = q.isEmpty ? span : q
+        return "\(t.type.rawValue)|\(topic)"
+    }
+
+    // Diagnostic for the stale-result symptom: shows each trigger's type, span, query,
+    // derived key, and whether the cooldown suppressed it. Set MAI_DEBUG_TRIGGERS=1.
+    nonisolated static func logTrigger(_ t: Trigger, key: String, suppressed: Bool) {
+        guard ProcessInfo.processInfo.environment["MAI_DEBUG_TRIGGERS"] == "1" else { return }
+        let q = t.payload["query"] ?? ""
+        FileHandle.standardError.write(Data(
+            "Mai trigger: type=\(t.type.rawValue) span=\"\(t.span)\" query=\"\(q)\" key=\"\(key)\" \(suppressed ? "SUPPRESSED(cooldown)" : "fired")\n".utf8))
     }
 
     private func doubleValue(_ any: Any?) -> Double? {

@@ -83,6 +83,11 @@ struct RichCardRow: View {
             if let info = card.info, !info.isEmpty {
                 Text(info).font(.system(.body)).textSelection(.enabled)
                     .foregroundStyle(card.suppressed ? .secondary : .primary)
+                // A model fallback (no source found) is labeled, never dressed up as sourced.
+                if card.unverified {
+                    Label("Unverified (no source found)", systemImage: "exclamationmark.triangle")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             } else if card.isPending(.info) || card.isPending(.route) {
                 SkeletonLines(count: 2)
             }
