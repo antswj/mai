@@ -30,8 +30,8 @@ public final class SimulatedEyes: Eyes, @unchecked Sendable {
         lock.withLock { latest }
     }
 
-    public func inject(_ content: String, at: Date = Date(), isChange: Bool = true) {
-        let event = ScreenContentEvent(content: content, timestamp: at, isChange: isChange)
+    public func inject(_ content: String, subject: String? = nil, at: Date = Date(), isChange: Bool = true) {
+        let event = ScreenContentEvent(content: content, timestamp: at, isChange: isChange, subject: subject)
         lock.withLock { latest = event }
         cont.yield(event)
     }

@@ -25,30 +25,38 @@ extension RealEyes {
                                                  prompt: Self.screenReadPrompt)
                 let parsed = Self.parseScreenRead(text)
                 self.updateNaming(roster: parsed.roster, highlighted: parsed.highlighted)
-                if !parsed.content.isEmpty { self.emit(content: parsed.content) }
+                if !parsed.content.isEmpty { self.emit(content: parsed.content, subject: parsed.subject) }
             } catch {
                 // A failed read leaves the last stored screen in place; no card fires.
             }
         }
     }
 
-    static let screenReadPrompt = """
-    You are reading a screen for an ambient assistant. In one or two sentences, say
-    what is on this screen. If it is a video call grid, also list the visible
-    participant names and which single participant is the current active speaker (the
-    highlighted tile). Respond as compact JSON only, no prose:
-    {"content":"...","participants":["name", "..."],"active_speaker":"name or empty"}
+    public static let screenReadPrompt = """
+    You are reading a screen for an ambient assistant. Respond as compact JSON only, no prose:
+    {"content":"...","subject":"...","participants":["name","..."],"active_speaker":"name or empty"}
+
+    - "content": in one or two sentences, what is on this screen.
+    - "subject": the single most salient thing worth looking up to help the viewer
+      understand or act on this screen: the topic, concept, entity, product, technology,
+      person, place, code symbol, or chart subject. Keep proper names in their original
+      language and script (do not translate them). Empty string if there is nothing
+      worth looking up (a blank screen, a generic desktop, a plain video call with no
+      shared content). This is NOT a description; it is the lookup target.
+    - "participants"/"active_speaker": only for a video call grid (visible names and the
+      single highlighted active speaker); empty otherwise.
     """
 
-    static func parseScreenRead(_ text: String) -> (content: String, roster: [String], highlighted: String?) {
+    public static func parseScreenRead(_ text: String) -> (content: String, subject: String?, roster: [String], highlighted: String?) {
         guard let obj = firstJSONObject(text) else {
-            return (text.trimmingCharacters(in: .whitespacesAndNewlines), [], nil)
+            return (text.trimmingCharacters(in: .whitespacesAndNewlines), nil, [], nil)
         }
         let content = (obj["content"] as? String) ?? text
+        let subject = (obj["subject"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         var roster: [String] = []
         if let arr = obj["participants"] as? [Any] { roster = arr.compactMap { $0 as? String } }
         let active = (obj["active_speaker"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (content, roster, (active?.isEmpty == false) ? active : nil)
+        return (content, (subject?.isEmpty == false) ? subject : nil, roster, (active?.isEmpty == false) ? active : nil)
     }
 
     private static func firstJSONObject(_ text: String) -> [String: Any]? {

@@ -31,8 +31,13 @@ public struct ScreenContentEvent: Codable, Sendable {
     public let content: String
     public let timestamp: Date
     public let isChange: Bool
-    public init(content: String, timestamp: Date, isChange: Bool) {
-        self.content = content; self.timestamp = timestamp; self.isChange = isChange
+    // The salient subject of the screen (the topic/concept/entity to look up), when the
+    // reader could identify one. Added as an optional with a default so the step-1
+    // contract stays source-compatible. Used to drive a useful sourced screen card
+    // (run through the lookup router) instead of a description of the slide.
+    public let subject: String?
+    public init(content: String, timestamp: Date, isChange: Bool, subject: String? = nil) {
+        self.content = content; self.timestamp = timestamp; self.isChange = isChange; self.subject = subject
     }
 }
 

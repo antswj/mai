@@ -166,14 +166,15 @@ func smokeScreen() async {
     guard let key = secrets.get("GEMINI_API_KEY") else { print("  no GEMINI_API_KEY, skipped"); return }
     guard let png = renderSlidePNG() else { print("  could not render slide"); return }
     do {
+        // Use the SAME prompt the app uses, so this checks the real subject extraction
+        // that drives a useful, sourced screen card (not just a description).
         let text = try await GeminiVision(apiKey: key, model: config.screenModel)
-            .read(imageData: png, mimeType: "image/png",
-                  prompt: "Read this screen and say in one sentence what it shows.")
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        print("  read: \(trimmed)")
-        let low = trimmed.lowercased()
-        let ok = low.contains("revenue") || low.contains("q3") || low.contains("18")
-        print("  RESULT: \(ok ? "ok (read the slide text)" : "uncertain (no expected keywords)")")
+            .read(imageData: png, mimeType: "image/png", prompt: RealEyes.screenReadPrompt)
+        let parsed = RealEyes.parseScreenRead(text)
+        print("  content: \(parsed.content)")
+        print("  subject: \(parsed.subject ?? "(none)")")
+        let ok = parsed.subject?.isEmpty == false
+        print("  RESULT: \(ok ? "ok (extracted a salient subject to look up)" : "uncertain (no subject extracted)")")
     } catch { print("  Gemini ERROR: \(error)") }
 }
 
