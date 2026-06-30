@@ -1182,6 +1182,122 @@ do {
     check(full.transcript == 800 && full.cards == 0, "no cards -> transcript uses the full height")
 }
 
+// ============================ Features 3: translation, HUD sizing, pinned cards ============================
+
+func token(_ text: String, final: Bool, translation: Bool = false, speaker: String? = nil, language: String? = nil) -> [String: Any] {
+    var t: [String: Any] = ["text": text, "is_final": final]
+    if translation { t["translation_status"] = "translation" } else { t["translation_status"] = "original" }
+    if let speaker { t["speaker"] = speaker }
+    if let language { t["language"] = language }
+    return t
+}
+func sonioxMsg(_ tokens: [[String: Any]]) -> SonioxMessage {
+    let data = try! JSONSerialization.data(withJSONObject: ["tokens": tokens])
+    return SonioxMessage.parse(data)!
+}
+
+section("Soniox segmenter: separates original speech from translation, pairs per line")
+do {
+    let seg = SonioxSegmenter()
+    // Original Japanese tokens stream first, then the endpoint marker, then the
+    // translation chunk arrives AFTER the marker in the same message (the live case).
+    let msg = sonioxMsg([
+        token("お寿司", final: true, speaker: "1", language: "ja"),
+        token("が食べたい", final: true, speaker: "1", language: "ja"),
+        token("<end>", final: true),
+        token("I want", final: true, translation: true, language: "en"),
+        token(" to eat sushi", final: true, translation: true, language: "en"),
+    ])
+    let up = seg.ingest(msg)
+    check(up.finals.count == 1, "one finalized segment")
+    check(up.finals.first?.text == "お寿司が食べたい", "original line is the Japanese speech, no translation mixed in")
+    check(up.finals.first?.translation == "I want to eat sushi", "translation paired with the segment despite arriving after the endpoint")
+    check(up.finals.first?.language == "ja", "segment language is the spoken language")
+}
+
+section("Soniox segmenter: live partial carries a live translation; original never polluted")
+do {
+    let seg = SonioxSegmenter()
+    let up = seg.ingest(sonioxMsg([
+        token("你好", final: false, speaker: "1", language: "zh"),
+        token("Hel", final: false, translation: true, language: "en"),
+    ]))
+    check(up.live == "你好", "live original line is just the spoken text")
+    check(up.liveTranslation == "Hel", "live translation streams alongside, as instant as the transcript")
+    check(up.finals.isEmpty, "nothing finalized yet")
+}
+
+section("Translation line is suppressed when it equals the original (same-language case)")
+do {
+    check(RealEars.usefulTranslation("Hello there", original: "Hello there") == nil,
+          "an English line translated to English shows no duplicate translation")
+    check(RealEars.usefulTranslation("I want to eat sushi", original: "お寿司が食べたい") == "I want to eat sushi",
+          "a real translation is kept")
+    check(RealEars.usefulTranslation("  ", original: "x") == nil, "blank translation is dropped")
+}
+
+section("TranslationProvider seam: Soniox is inline (no per-line call)")
+do {
+    let p = TranslationFactory.make(engine: "soniox", target: .en)
+    check(p.inlineOnTranscriptStream, "the Soniox provider's translation rides the stream")
+    check(p.target == .en, "target is the interface language")
+    let nilOut = await p.translate(line: "お寿司", from: .ja)
+    check(nilOut == nil, "inline provider does not translate per line (it already rode the stream)")
+}
+
+section("HUD content sizing: compact when short, grows, caps, 60/40 only under pressure")
+do {
+    let maxC = 600.0
+    // Short transcript, no cards: HUD is just the content height (compact), not the max.
+    let short = HUDLayout.regionHeights(transcriptNatural: 80, cardsNatural: 0, maxContent: maxC, hasCards: false)
+    check(short.transcript == 80 && short.cards == 0 && short.total == 80, "compact: sizes to content, not the max")
+    // A small card lets the transcript take the rest (not forced to 60 percent).
+    let small = HUDLayout.regionHeights(transcriptNatural: 1000, cardsNatural: 60, maxContent: maxC, hasCards: true)
+    check(small.cards == 60, "a small card stays its natural height")
+    check(small.transcript == maxC - 60, "the transcript takes the remaining height")
+    // Both overflow: cards capped at 40 percent, transcript at the remaining 60 percent.
+    let full = HUDLayout.regionHeights(transcriptNatural: 1000, cardsNatural: 1000, maxContent: maxC, hasCards: true)
+    check(full.cards == (maxC * 0.4).rounded(), "cards capped at 40 percent under pressure")
+    check(full.transcript == maxC - full.cards, "transcript takes the other 60 percent")
+    check(full.total <= maxC + 0.5, "total never exceeds the max")
+}
+
+section("Pinned carousel index logic")
+do {
+    check(Carousel.afterPin(newCount: 3) == 2, "pinning shows the newest (last) card")
+    check(Carousel.clamp(5, count: 3) == 2, "clamp caps at the last index")
+    check(Carousel.clamp(-1, count: 3) == 0, "clamp floors at zero")
+    check(Carousel.next(0, count: 3) == 1 && Carousel.next(2, count: 3) == 2, "next advances and clamps at the end")
+    check(Carousel.prev(2, count: 3) == 1 && Carousel.prev(0, count: 3) == 0, "prev retreats and clamps at the start")
+    // Unpinning the shown card keeps a valid neighbor.
+    check(Carousel.afterUnpin(removedIndex: 1, current: 1, newCount: 2) == 0, "removing the current card clamps the index")
+    check(Carousel.afterUnpin(removedIndex: 0, current: 2, newCount: 2) == 1, "removing before current shifts the index left")
+    check(Carousel.afterUnpin(removedIndex: 0, current: 0, newCount: 0) == 0, "empty carousel is index 0")
+}
+
+section("Pinned-card note line: concise, with source, survives the notes export")
+do {
+    let card = RichCard(trigger: .question, timestamp: Date(), route: .entity, headline: "Kubernetes",
+                        info: "An open-source container orchestration system.",
+                        source: RichSource(title: "Wikipedia", url: "https://en.wikipedia.org/wiki/Kubernetes"))
+    let line = card.noteLine()
+    check(line.contains("Kubernetes") && line.contains("container orchestration"), "note line carries headline and info")
+    check(line.contains("wikipedia.org"), "note line carries the source")
+
+    // The export pipeline includes extraNoted (pinned cards) and the verifier keeps them.
+    let store = NotesStore(llm: StubLLM(), model: "claude-sonnet-4-6", interface: .en)
+    await store.start(now: Date(timeIntervalSince1970: 1_700_000_000))
+    let t = Date(timeIntervalSince1970: 1_700_000_000)
+    await store.add(MeetingLine(speaker: "Sato", isUser: false, text: "Let us discuss the deployment.", timestamp: t))
+    let folder = tempDir()
+    guard let export = await store.stop(now: t.addingTimeInterval(60), folder: folder, extraNoted: [line]) else {
+        check(false, "export produced"); fatalError()
+    }
+    let bullets = export.notes.sections.flatMap { $0.bullets }
+    check(bullets.contains { $0.contains("Kubernetes") }, "a noted pinned card lands in the exported notes")
+    check(FileManager.default.fileExists(atPath: folder.appendingPathComponent(export.docxFileName).path), "docx written")
+}
+
 // Summary
 print("\n========================================")
 if failures.isEmpty {
