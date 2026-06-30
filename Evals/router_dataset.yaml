@@ -26,6 +26,29 @@
         The JSON "route" is "fresh" and "needs_search" is true (a release date is
         time-sensitive).
 
+# A subject extracted from a presentation slide (the screen-card path feeds the
+# vision-extracted subject through this same router) must route to a real, sourced
+# lookup, not a model description.
+- vars:
+    topic: "Kubernetes"
+    conversation: "[screen] A slide titled: Introduction to Kubernetes architecture"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "entity" or "technical" (a real concept worth a sourced
+        lookup), with a query that would find useful information about Kubernetes.
+
+- vars:
+    topic: "量子コンピュータ"
+    conversation: "[screen] スライド: 量子コンピュータの基礎"
+  assert:
+    - type: contains-json
+    - type: llm-rubric
+      value: >
+        The JSON "route" is "entity" or "technical" and the subject is kept in its
+        native script (量子コンピュータ), routed for a sourced lookup, not a description.
+
 - vars:
     topic: "who is Ada Lovelace"
     conversation: "Mia: we were just reading about early computing pioneers"

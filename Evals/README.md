@@ -95,6 +95,14 @@ The card brain is verified across the same three layers:
 - Router freshness (in `router_dataset.yaml`): a brand-new movie or a release-date
   question routes to grounded search, not a model answer. The local freshness
   guardrail that enforces this ahead of the model is tested in `swift run MaiTests`.
+- Screen-card usefulness: a subject extracted from a slide (including a Japanese one,
+  kept in native script) routes through the same router to a real sourced lookup, not
+  a description (cases in `router_dataset.yaml`). The end-to-end screen-card pipeline
+  (subject then a sourced card in the interface language, deduped per subject) is
+  tested in `swift run MaiTests`; the vision step that extracts the subject from a real
+  slide image is checked live by `swift run MaiSmoke screen` (it prints the subject).
+  Echo suppression is deterministic (no model), so it is covered fully by `swift run
+  MaiTests`, not an LLM-judge eval.
 - The separate verification pass (dropping unsupported bullets), the generated title,
   the .docx and .md write, the "note this down" merge, the info-cards-pause-while-
   reply-cards-run gate, Keychain storage, the spend math, and the HUD show/hide and
