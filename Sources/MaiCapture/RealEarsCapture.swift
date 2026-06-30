@@ -55,7 +55,7 @@ extension RealEars {
         noteTranscript()   // Soniox responded; transcript pipeline is alive
         if !update.live.isEmpty {
             emitPartial(update.live, speakerLabel: update.liveSpeaker, language: update.liveLanguage,
-                        source: source, lineId: "live-\(source.rawValue)")
+                        translation: update.liveTranslation, source: source, lineId: "live-\(source.rawValue)")
         }
         for segment in update.finals {
             emitFinal(segment, source: source)
