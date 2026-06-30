@@ -42,8 +42,27 @@ when available, otherwise the model's own general knowledge, rather than going
 blank. Suggested replies appear only when the **Reply** toggle is on; the
 information itself is always there.
 
-Clone it, add your own API keys, build the app bundle, grant two permissions, and it
-works. (Run unbundled with `swift run Mai` and it degrades to a typed-input dev mode.)
+Mai has two faces, both driven by the same engine. **Mission mode** is the resting
+state: a small, glassy heads-up display at the top-right of the screen, like where
+Siri appears, that stays in front of every app (including full-screen calls) without
+stealing focus. It slides in when there is something relevant (speech, a card, or
+when you summon it with a global shortcut) and slides away to just the menu bar when
+things go quiet. The **full app** is the lean-in state: an expansive window with the
+full transcript, all cards, the chat assistant, the meeting notes view, settings, and
+a spend meter. Open it deliberately; close it and Mai returns to the top-right HUD.
+
+A meeting assistant (the Claude-backed chat, behind a swappable provider) reads the
+whole transcript so you can ask "what are they talking about" and get a grounded
+answer including what you yourself said; while you chat, info cards pause but
+suggested-reply cards keep running so you never miss one. Say "note this down" and it
+folds into the notes. A real notes pipeline accumulates the meeting, and on stop it
+writes up structured notes, verifies every line against what was actually said,
+generates a title, and saves a clean Word document plus a timestamped Markdown
+transcript to a folder you choose.
+
+Clone it, add your own API keys (stored in the macOS Keychain), build the app bundle,
+grant two permissions, and it works. (Run unbundled with `swift run Mai` and it
+degrades to a typed-input dev mode.)
 
 ## What is in here
 
@@ -53,8 +72,14 @@ works. (Run unbundled with `swift run Mai` and it degrades to a typed-input dev 
   system audio, Soniox streaming transcription, low-rate screen watching with a
   cheap frame-diff, and Gemini screen reads. It implements the engine's `Ears` and
   `Eyes` contracts, so the brain is unchanged.
-- A SwiftUI app (`Sources/MaiApp`): the card stream, the always-on live transcript,
-  a capture indicator, and a pause control. A debug toggle uses simulated input.
+- A SwiftUI app (`Sources/MaiApp`) with two faces: a floating Mission mode HUD
+  (an `NSPanel`, non-activating, over full-screen apps, auto show/hide, a global
+  summon hotkey) and a full HIG window (live transcript, cards, chat, notes, settings,
+  spend meter). Liquid Glass on the functional layer, with a material fallback below
+  macOS 26. A menu bar item is the 24/7 anchor; the app launches at login.
+- A meeting assistant behind a swappable `AssistantProvider` (Claude now), a real
+  notes pipeline (accumulate, verify against the transcript, title, save a clean
+  `.docx` and a timestamped `.md`), and a spend meter from local usage counts.
 - Real lookups over HTTP: an LLM (Anthropic by default, Groq as an alternative),
   Google Places (New) plus Recruit Hot Pepper for nearby places, Wikipedia (entity
   summaries with cross-language resolution), and Google Gemini (screen reads and
@@ -65,6 +90,9 @@ works. (Run unbundled with `swift run Mai` and it degrades to a typed-input dev 
 - On-device voice-activity gating (Silero VAD v5 via ONNX Runtime, model bundled, no
   network at runtime) so transcription only runs, and only bills, while someone speaks.
 - A local, exportable session store (SQLite via GRDB) and an append-only raw log.
+- First-run onboarding (permissions, API keys into the Keychain with validation, the
+  notes folder), and shipping scripts (a signed `.dmg` plus a ready-to-run, documented
+  notarization script).
 - Automated tests, behavioral LLM-as-judge evals, live smoke checks, and a secrets scan.
 
 ## Requirements
@@ -78,6 +106,11 @@ works. (Run unbundled with `swift run Mai` and it degrades to a typed-input dev 
   balance returns a clear error and no transcript).
 
 ## Setup
+
+There are two ways to provide keys. For the shipped app, enter them in the app: on
+first run, onboarding walks you through pasting each key, and they are stored in the
+**macOS Keychain** (never a file). For command-line development (`swift run MaiSmoke`,
+the evals), a `.env` file is the convenient path.
 
 1. Enter the workspace:
 
@@ -100,7 +133,9 @@ works. (Run unbundled with `swift run Mai` and it degrades to a typed-input dev 
    - `HOTPEPPER_API_KEY`
    - `SONIOX_API_KEY` (real-time speech to text; fund the account for live transcripts)
 
-   `.env` is gitignored and must never be committed.
+   `.env` is gitignored and must never be committed. The app reads `.env` and the
+   process environment first, then the Keychain, so a dev `.env` and the in-app keys
+   can coexist. Keys you enter in the app go only to the Keychain.
 
 3. Enable the pre-commit safety hook (one time):
 
@@ -119,11 +154,18 @@ cd ~/mai
 open Mai.app
 ```
 
-The first launch prompts for **Screen Recording** and **Microphone**. Grant both,
-then quit and reopen `Mai.app` (macOS requires a relaunch after granting Screen
-Recording). If a prompt does not appear, grant them manually in System Settings,
-Privacy and Security: add `Mai` under **Screen and System Audio Recording** and under
-**Microphone**, then relaunch.
+On first launch, onboarding walks you through granting **Screen Recording** and
+**Microphone**, pasting your API keys (into the Keychain), and choosing the folder
+where meeting notes are saved. Grant both permissions, then quit and reopen `Mai.app`
+(macOS requires a relaunch after granting Screen Recording). If a prompt does not
+appear, grant them manually in System Settings, Privacy and Security: add `Mai` under
+**Screen and System Audio Recording** and under **Microphone**, then relaunch.
+
+Mai runs as a menu bar item (no Dock icon). Mission mode, the small heads-up display,
+appears at the top-right when there is something relevant and slides away when things
+are quiet. Use the menu bar item to pause, to show Mission mode, or to open the full
+app; set a global summon shortcut in Settings to bring up Mission mode and its ask
+field from any app.
 
 ### If Mai keeps asking for permission (even though System Settings shows it granted)
 
@@ -152,11 +194,39 @@ the self-signed cert once:
 unreliable `CGPreflightScreenCaptureAccess`, so once the grant actually applies to the
 running build, the app stops asking.)
 
-The window has a capture bar at the top (a colored indicator, a **Pause** button, and
-a **Simulated** debug toggle), the live transcript in the middle, and the card stream
-on the right. The card stream shows each card with a colored tier badge, the title,
-the body, an action button when there is one (for example "Open in Maps"), and small
-secondary detail (trigger type, score, latency). A toggle hides suppressed cards.
+The full app (open it from the menu bar) is a standard macOS window with a sidebar:
+**Live** (the transcript and the card stream side by side), **Chat** (the meeting
+assistant), **Notes** (start/stop note-taking and the list of saved meetings), and
+**Spend** (the estimated daily cost). The card stream shows each card with a colored
+tier badge, the title, the answer, a real image and tappable source when present, an
+action button when there is one (for example "Open in Maps"), and an optional
+suggested reply when the **Reply** toggle is on. Closing the window returns Mai to the
+top-right HUD; the transcript, cards, and notes are continuous across both.
+
+## Ship Mai to someone else
+
+`make-app.sh` already signs with your Developer ID and the hardened runtime, so the
+app opens cleanly on your own Mac. To produce a disk image and (when you are ready)
+notarize it so it opens on anyone's Mac:
+
+```
+./release.sh        # builds + signs Mai.app, then packages a signed Mai.dmg
+```
+
+The `.dmg` opens cleanly on your Mac. On someone else's Mac it shows a Gatekeeper
+warning until it is notarized. When you are ready to share it, notarize once:
+
+```
+./notarize.sh       # notarizes and staples the app and the dmg
+```
+
+`notarize.sh` documents the one-time setup in plain English at the top: turn on
+two-factor for your Apple Account, generate an **app-specific password** at
+account.apple.com (this is not your Apple ID password), and store it once with
+`xcrun notarytool store-credentials "MaiNotary" ...`. After that, each release is
+`./release.sh` then `./notarize.sh`. The script verifies the result with
+`stapler validate` and `spctl`; you can also run `syspolicy_check distribution Mai.app`
+as the authoritative Gatekeeper check on macOS 14+.
 
 ## Run unbundled (dev mode, no capture)
 
@@ -185,6 +255,16 @@ With real capture (`open Mai.app`, permissions granted):
    screen cue such as `画面を見てください`.
 5. Press **Pause** and confirm capturing stops (the indicator changes and nothing new
    appears); press Resume to continue.
+6. Put a full-screen call on screen and confirm the top-right HUD stays in front and
+   that clicking it does not pull focus out of the call. Open the full app and confirm
+   the expansive experience, then close it and confirm Mai reverts to the HUD.
+7. In the app's **Chat**, ask "what are they talking about" and confirm the assistant
+   summarizes the meeting and what you said; while the chat is open, info cards pause
+   but a suggested-reply card still appears. Say "note this down" to add an item.
+8. In **Notes**, press **Start Note-Taking**, hold a short meeting, then **Stop**.
+   Watch the processing state (reviewing, verifying, titling, saving), then open the
+   saved `.docx` and `.md` from your chosen folder. The meeting appears in the list.
+9. Check the menu bar pause and the **Spend** view (it reflects savings during silence).
 
 With simulated input (`swift run Mai`), the same flows work with typed lines: try a
 sushi line, a `Sato: ご意見をお願いできますか？` reference (a Japanese suggested reply
@@ -246,6 +326,7 @@ Step-3 knobs, also in `config.toml`:
   ```
   cd ~/mai && export ANTHROPIC_API_KEY="$(grep '^ANTHROPIC_API_KEY=' .env | cut -d= -f2-)"
   cd Evals && promptfoo eval -c promptfooconfig.yaml && promptfoo eval -c promptfooconfig.drafter.yaml
+  # plus: promptfooconfig.router.yaml, promptfooconfig.assistant.yaml, promptfooconfig.notes.yaml
   ```
 
 - **Live smoke tests** (validate your keys end to end against the real APIs):
@@ -287,8 +368,11 @@ audio is sent anywhere to decide if you are speaking), and because it tears the
 transcription stream down during silence, audio only leaves the machine while
 someone is actually talking. The **Pause** button is a real privacy valve: it stops
 capture and closes the transcription sockets, so nothing is captured, transcribed,
-read, or stored until you resume. The local store and raw log are gitignored;
-participant names inferred from the screen are session-only.
+read, or stored until you resume. The local store, raw log, and saved meeting files
+(the notes `.docx`, the transcript `.md`, and the export bundle) are gitignored and
+stay in the folder you chose; participant names inferred from the screen are
+session-only. API keys live in the macOS Keychain, never in the repo. The spend meter
+stores only local aggregate counts (audio-seconds and call counts), never content.
 
 When Mai shows a place from Hot Pepper, it includes the required credit
 "Powered by ホットペッパーグルメ Webサービス".

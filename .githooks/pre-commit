@@ -28,6 +28,10 @@ while IFS= read -r f; do
       block "captured-data path staged: $f (data stays local only)" ;;
     *.sqlite|*.sqlite-*|*.db|*.db-*|*.jsonl)
       block "local store/capture file staged: $f" ;;
+    *.docx|*.mai.json|mai-meetings.json|mai-usage.json)
+      block "saved meeting/notes/usage file staged: $f (meeting data stays local only)" ;;
+    *.cer|*.certSigningRequest|*.p12|*.mobileprovision)
+      block "signing artifact staged: $f (keep certificates local only)" ;;
     .private-terms)
       block "private-terms list staged: $f (keep it local only)" ;;
   esac
