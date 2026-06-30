@@ -926,6 +926,18 @@ do {
     }
 }
 
+section("Resource bundles resolve without crashing (ship-safety)")
+do {
+    // Prompts must load via the install-location resolver, never Bundle.module (which
+    // fatal-errors off the build machine). A non-empty prompt proves resolution works.
+    check(!Prompts.classifier.isEmpty, "classifier prompt resolves")
+    check(!Prompts.assistant.isEmpty, "assistant prompt resolves")
+    check(!Prompts.notesWriter.isEmpty, "notes-writer prompt resolves")
+    check(Prompts.load("does-not-exist").isEmpty, "a missing prompt returns empty, not a crash")
+    // The MaiCore resource bundle is locatable by the safe resolver.
+    check(MaiResources.bundle("Mai_MaiCore") != nil, "MaiCore resource bundle located via the safe resolver")
+}
+
 // Summary
 print("\n========================================")
 if failures.isEmpty {

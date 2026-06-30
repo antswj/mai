@@ -31,7 +31,11 @@ public final class SileroVAD: @unchecked Sendable {
 
     // Locate the bundled model and build a VAD, or nil if the model is missing.
     public static func bundled(sampleRate: Int) -> SileroVAD? {
-        guard let url = Bundle.module.url(forResource: "silero_vad", withExtension: "onnx") else {
+        // Resolve via the install locations, never Bundle.module (which fatal-errors
+        // off this machine). Source path covers `swift run` from the repo.
+        guard let url = MaiResources.url(forResource: "silero_vad", withExtension: "onnx",
+                                         bundleNames: ["Mai_MaiCapture"],
+                                         sourcePaths: ["Sources/MaiCapture/Resources/silero_vad.onnx"]) else {
             FileHandle.standardError.write(Data("Mai: silero_vad.onnx not found in bundle; VAD gating disabled.\n".utf8))
             return nil
         }

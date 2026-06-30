@@ -89,21 +89,24 @@ final class AppModel: ObservableObject {
         let config = Config.load()
         self.config = config
         self.secrets = Secrets()
-        self.store = (try? SQLiteStore(path: "data/mai.sqlite")) ?? StubStore()
-        self.verbatim = VerbatimLog()
+        // A shipped app launched from /Applications has cwd "/", so repo-relative
+        // "data/" would not persist. Use Application Support/Mai when bundled; keep
+        // the repo's "data/" for `swift run` from the source tree.
+        let bundled = Bundle.main.bundleIdentifier != nil
+        self.bundled = bundled
+        let dataDir = Self.dataDirectory(bundled: bundled)
+        self.store = (try? SQLiteStore(path: dataDir + "/mai.sqlite")) ?? StubStore()
+        self.verbatim = VerbatimLog(directory: dataDir)
         self.showSuppressed = config.showSuppressedLog
         self.responseEnabled = config.responseEnabled
         self.onboardingComplete = UserDefaults.standard.bool(forKey: "mai.onboardingComplete")
-        // Real capture needs Screen Recording + Microphone, which only a signed .app
-        // bundle can hold. Running unbundled (swift run) has no bundle id, so default
-        // to the simulated dev path there. Force simulated with MAI_SIMULATED=1.
-        let bundled = Bundle.main.bundleIdentifier != nil
-        self.bundled = bundled
+        // Running unbundled (swift run) has no bundle id, so default to the simulated
+        // dev path there. Force simulated with MAI_SIMULATED=1.
         self.useSimulated = ProcessInfo.processInfo.environment["MAI_SIMULATED"] == "1" || !bundled
 
         // The assistant, notes pipeline, and usage meter persist across capture
         // restarts (a watchdog restart must not reset accumulated notes).
-        let meter = UsageMeter(storeURL: URL(fileURLWithPath: "data/mai-usage.json"))
+        let meter = UsageMeter(storeURL: URL(fileURLWithPath: dataDir + "/mai-usage.json"))
         self.usage = meter
         let baseLLM = MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: meter)
         self.notes = NotesStore(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
@@ -647,6 +650,17 @@ final class AppModel: ObservableObject {
         }
         notesFolder = url
         refreshSavedMeetings()
+    }
+
+    // The local data directory for the session store, raw log, and usage counts.
+    // Application Support/Mai for a shipped app; the repo's data/ for `swift run`.
+    static func dataDirectory(bundled: Bool) -> String {
+        if bundled, let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let dir = appSupport.appendingPathComponent("Mai", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir.path
+        }
+        return "data"
     }
 
     static func resolveNotesFolder() -> URL? {
