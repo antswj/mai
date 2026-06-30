@@ -73,11 +73,16 @@ final class MissionHUDController {
         let size = hosting.fittingSize
         let w = size.width > 1 ? size.width : 384
         let h = min(CGFloat(maxH), size.height > 1 ? size.height : 260)   // grow up to the max, then scroll
-        panel.setContentSize(NSSize(width: w, height: h))
+        // Deadband: ignore sub-threshold height jitter so content hovering around a
+        // boundary does not make the panel flap. Width and origin still track.
+        let cur = panel.frame.size
+        let newH = abs(h - cur.height) < 8 ? cur.height : h
         let origin = HUDLayout.topRightOrigin(
             visibleFrame: ScreenRect(x: vf.minX, y: vf.minY, width: vf.width, height: vf.height),
-            size: (width: Double(w), height: Double(h)), inset: Double(inset))
-        panel.setFrameOrigin(NSPoint(x: origin.x, y: origin.y))
+            size: (width: Double(w), height: Double(newH)), inset: Double(inset))
+        // Animate the resize so growth/contraction is smooth and quiet (top-right pinned,
+        // so the origin moves with the height).
+        panel.setFrame(NSRect(x: origin.x, y: origin.y, width: w, height: newH), display: true, animate: true)
     }
 
     var isVisible: Bool { panel.isVisible }
