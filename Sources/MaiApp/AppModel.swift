@@ -37,11 +37,19 @@ final class StreamRichSink: RichCardSink, @unchecked Sendable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var richItems: [RichCard] = []          // rich cards, newest first
+    // Pinned cards (kept separately so the 200-cap on richItems can never evict them;
+    // they never auto-dismiss). The carousel shows one at a time. notedCardIds marks
+    // pinned cards to be written into the exported meeting notes.
+    @Published var pinnedCards: [RichCard] = []
+    @Published var carouselIndex: Int = 0
+    @Published var notedCardIds: Set<String> = []
+    private var notedCardLines: [String: String] = [:]   // card id -> one-line note for export
     @Published var liveLines: [LiveTranscriptLine] = [] // transcript, oldest first (last = active)
     @Published var captureState: CaptureState = .starting
     @Published var showSuppressed: Bool
     @Published var useSimulated: Bool
     @Published var responseEnabled: Bool                // Part B toggle
+    @Published var translationOn: Bool                  // live-transcript translation toggle
     @Published var status: String = ""
     @Published var headphonesTip = false                // one-time tip: headphones remove echo
     @Published var hudMaxHeight: CGFloat = 600           // set by the HUD controller from the screen
@@ -69,6 +77,9 @@ final class AppModel: ObservableObject {
     private var assistant: AssistantProvider!
     private var notes: NotesStore!
     private var usage: UsageMeter!
+    // The live-transcript translation provider (Soniox same-stream now; swappable).
+    private(set) lazy var translation: TranslationProvider =
+        TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
 
     private(set) var config: Config
     private let secrets: Secrets
@@ -104,6 +115,7 @@ final class AppModel: ObservableObject {
         self.verbatim = VerbatimLog(directory: dataDir)
         self.showSuppressed = config.showSuppressedLog
         self.responseEnabled = config.responseEnabled
+        self.translationOn = config.sttTranslation
         self.onboardingComplete = UserDefaults.standard.bool(forKey: "mai.onboardingComplete")
         // Running unbundled (swift run) has no bundle id, so default to the simulated
         // dev path there. Force simulated with MAI_SIMULATED=1.
@@ -198,7 +210,47 @@ final class AppModel: ObservableObject {
             richItems.insert(card, at: 0)
             if richItems.count > 200 { richItems.removeLast(richItems.count - 200) }
         }
+        // Keep a pinned copy fresh as its enrichment lands (it lives outside richItems).
+        if let pidx = pinnedCards.firstIndex(where: { $0.id == card.id }) { pinnedCards[pidx] = card }
     }
+
+    // MARK: - Pinned cards (Part 3)
+
+    // Flowing cards = the stream minus the pinned ones (pinned moved into the carousel).
+    var flowingCards: [RichCard] {
+        let pinned = Set(pinnedCards.map { $0.id })
+        let items = showSuppressed ? richItems : richItems.filter { !$0.suppressed }
+        return items.filter { !pinned.contains($0.id) }
+    }
+
+    func isPinned(_ id: String) -> Bool { pinnedCards.contains { $0.id == id } }
+
+    func pin(_ card: RichCard) {
+        guard !isPinned(card.id) else { return }
+        pinnedCards.append(card)
+        carouselIndex = Carousel.afterPin(newCount: pinnedCards.count)   // show the newly pinned one
+    }
+
+    func unpin(_ id: String) {
+        guard let removed = pinnedCards.firstIndex(where: { $0.id == id }) else { return }
+        pinnedCards.remove(at: removed)
+        notedCardIds.remove(id); notedCardLines[id] = nil
+        carouselIndex = Carousel.afterUnpin(removedIndex: removed, current: carouselIndex, newCount: pinnedCards.count)
+    }
+
+    func carouselNext() { carouselIndex = Carousel.next(carouselIndex, count: pinnedCards.count) }
+    func carouselPrev() { carouselIndex = Carousel.prev(carouselIndex, count: pinnedCards.count) }
+
+    // Mark a pinned card to be written into the exported meeting notes (toggle).
+    func toggleNoteCard(_ card: RichCard) {
+        if notedCardIds.contains(card.id) {
+            notedCardIds.remove(card.id); notedCardLines[card.id] = nil
+        } else {
+            notedCardIds.insert(card.id); notedCardLines[card.id] = card.noteLine()
+        }
+    }
+
+    func isNoted(_ id: String) -> Bool { notedCardIds.contains(id) }
 
     // Part B: flip the suggested-response toggle and rebuild the session so the
     // enricher picks up the new setting. Cards already shown are kept.
@@ -210,6 +262,20 @@ final class AppModel: ObservableObject {
         useSimulated = keepSimulated
         startSession()
         status = responseEnabled ? "Suggested responses on." : "Suggested responses off."
+    }
+
+    // Part 1: flip the live-transcript translation toggle and rebuild the session so the
+    // Soniox stream reconnects with or without the translation block (the VAD reconnect
+    // and pre-roll handle the switch without clipping). Translation rides the same stream
+    // so it is as instant as the transcript, and never appears in the cards.
+    func toggleTranslation() {
+        translationOn.toggle()
+        config.sttTranslation = translationOn
+        let keepSimulated = useSimulated
+        stopSession()
+        useSimulated = keepSimulated
+        startSession()
+        status = translationOn ? "Translation on (\(config.interfaceLanguage.rawValue))." : "Translation off."
     }
 
     // Apply a settings change to the config and rebuild the session so it takes effect.
@@ -385,6 +451,7 @@ final class AppModel: ObservableObject {
             liveLines.append(line)
             if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
             feedNote(line)
+            translateLineIfNeeded(line)
         } else {
             // Upsert the single in-flight partial line for this source.
             if let idx = liveLines.firstIndex(where: { $0.id == partialID(line.source) }) {
@@ -403,6 +470,27 @@ final class AppModel: ObservableObject {
     private func lineWithID(_ line: LiveTranscriptLine, _ id: String) -> LiveTranscriptLine {
         LiveTranscriptLine(id: id, speaker: line.speaker, source: line.source, text: line.text,
                            language: line.language, translation: line.translation, isFinal: line.isFinal)
+    }
+
+    // The TranslationProvider seam. For the Soniox provider (inline) the translation
+    // already rode the stream and is on the line, so this is a no-op. A future per-line
+    // provider (inlineOnTranscriptStream == false) translates the finalized line here and
+    // fills it in, with no other change to the app. Selected by config.translationEngine.
+    private func translateLineIfNeeded(_ line: LiveTranscriptLine) {
+        guard translationOn, !translation.inlineOnTranscriptStream,
+              line.isFinal, line.translation == nil else { return }
+        let id = line.id, text = line.text, from = line.language, provider = translation
+        Task { [weak self] in
+            guard let translated = await provider.translate(line: text, from: from), !translated.isEmpty else { return }
+            await MainActor.run {
+                guard let self else { return }
+                if let idx = self.liveLines.firstIndex(where: { $0.id == id }) {
+                    var l = self.liveLines[idx]
+                    l.translation = translated
+                    self.liveLines[idx] = l
+                }
+            }
+        }
     }
 
     // MARK: - Simulated input (dev path)
@@ -568,8 +656,10 @@ final class AppModel: ObservableObject {
         noteTaking = false
         notesProcessing = NotesStore.Stage.reviewing.rawValue
         let folder = notesFolder
+        // Noted pinned cards are written into the export alongside the transcript notes.
+        let extraNoted = notedCardIds.compactMap { notedCardLines[$0] }
         Task { [notes] in
-            let export = await notes!.stop(now: Date(), folder: folder, onStage: { stage in
+            let export = await notes!.stop(now: Date(), folder: folder, extraNoted: extraNoted, onStage: { stage in
                 Task { @MainActor in self.notesProcessing = (stage == .done) ? nil : stage.rawValue }
             })
             await MainActor.run {

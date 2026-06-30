@@ -277,8 +277,17 @@ With real capture (`open Mai.app`, permissions granted):
     about the slide's subject (facts, a breakdown, figures), in your interface language,
     not a description, and a new slide produces a new card. A Japanese or Chinese slide
     works the same, the card coming back in the interface language.
-12. Confirm the HUD extends down to just above the Dock, showing as much transcript as
-    fits, and that when a card is present it settles into roughly 60 percent transcript
+12. Turn on the **Translate** switch in the live transcript: a Japanese or Chinese line
+    shows an English (interface-language) translation beneath it, appearing about as
+    fast as the line itself (it rides the same Soniox stream). Toggle it off to remove
+    the translations. They never appear in the cards.
+13. Pin a card with the pin button: it moves into the pinned carousel at the top of the
+    cards area and stops auto-dismissing. Pin a few and swipe (or use the arrows and
+    page dots) to page through them. The X unpins. The note button marks a pinned card
+    for the meeting notes, so its content appears in the exported `.docx` and `.md`.
+14. Confirm the HUD starts small when idle or short, grows downward as the transcript
+    and cards lengthen, stops at the top of the Dock, and shrinks back when content is
+    removed; when both are shown and tall, it settles into roughly 60 percent transcript
     over 40 percent cards, each scrolling on its own.
 
 With simulated input (`swift run Mai`), the same flows work with typed lines: try a
