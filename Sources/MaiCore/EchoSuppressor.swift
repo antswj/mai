@@ -19,13 +19,15 @@ import Foundation
 // no audio.
 public struct EchoSuppressor: Sendable {
     public struct Config: Sendable {
-        public var windowSeconds: Double      // how far back a matching system line may be
+        public var windowSeconds: Double      // how far BACK a matching system line may be
+        public var forwardSeconds: Double     // how far AFTER the mic line a system line may finalize
         public var similarity: Double         // char-bigram Jaccard threshold to call it echo
         public var minChars: Int              // length floor (normalized chars) to be eligible
         public var minWords: Int              // or this many words
-        public init(windowSeconds: Double = 9, similarity: Double = 0.72, minChars: Int = 12, minWords: Int = 4) {
-            self.windowSeconds = windowSeconds; self.similarity = similarity
-            self.minChars = minChars; self.minWords = minWords
+        public init(windowSeconds: Double = 9, forwardSeconds: Double = 3.5, similarity: Double = 0.72,
+                    minChars: Int = 12, minWords: Int = 4) {
+            self.windowSeconds = windowSeconds; self.forwardSeconds = forwardSeconds
+            self.similarity = similarity; self.minChars = minChars; self.minWords = minWords
         }
     }
 
@@ -53,8 +55,11 @@ public struct EchoSuppressor: Sendable {
         guard norm.count >= config.minChars || wordCount(text) >= config.minWords else { return false }
         for i in recentSystem.indices {
             guard !recentSystem[i].used else { continue }
-            guard at.timeIntervalSince(recentSystem[i].at) <= config.windowSeconds,
-                  at.timeIntervalSince(recentSystem[i].at) >= -1.0 else { continue }   // small forward tolerance
+            // A matching system line may be up to windowSeconds before the mic line, or
+            // up to forwardSeconds after it (the mic echo can finalize first, then the
+            // system line finalizes during the hold).
+            let delta = at.timeIntervalSince(recentSystem[i].at)   // >0: system before mic
+            guard delta <= config.windowSeconds, delta >= -config.forwardSeconds else { continue }
             if Self.similarity(norm, recentSystem[i].normalized) >= config.similarity {
                 recentSystem[i].used = true
                 return true
@@ -64,7 +69,8 @@ public struct EchoSuppressor: Sendable {
     }
 
     private mutating func prune(now: Date) {
-        recentSystem.removeAll { now.timeIntervalSince($0.at) > config.windowSeconds }
+        // Keep entries long enough to match a held mic final that finalized earlier.
+        recentSystem.removeAll { now.timeIntervalSince($0.at) > config.windowSeconds + config.forwardSeconds }
     }
 
     private func wordCount(_ s: String) -> Int {

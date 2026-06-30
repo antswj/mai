@@ -29,6 +29,12 @@ public final class RealEars: Ears, @unchecked Sendable {
     // by the mic). Guarded; mic and system Soniox callbacks touch it concurrently.
     private var echo = EchoSuppressor()
     private let echoLock = NSLock()
+    // When system audio was last actually playing (the system VAD gate forwarded voice).
+    // The mic-final hold is gated on this, so the user's own speech is only delayed
+    // while the speaker is actually producing sound (when echo is possible), not in a
+    // quiet room. Continuous capture does NOT count; only forwarded (voiced) audio.
+    private var lastSystemActiveAt = Date.distantPast
+    func noteSystemActive() { echoLock.withLock { lastSystemActiveAt = Date() } }
 
     // Filled in the capture chunk.
     private var micClient: SonioxClient?
@@ -91,7 +97,12 @@ public final class RealEars: Ears, @unchecked Sendable {
     }
     func feedSystem(_ data: Data) {
         noteCaptured()
-        if let g = systemGate { g.feed(data) } else { systemClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
+        if let g = systemGate {
+            g.feed(data)   // the gate calls noteSystemActive via onSent only when it forwards voiced audio
+        } else {
+            // VAD off: system audio streams continuously, so treat it as active.
+            systemClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count); noteSystemActive()
+        }
     }
     // Called by the VAD gate when it actually forwards audio to Soniox.
     func recordSentBytes(_ bytes: Int) { recordTranscription(bytes: bytes) }
@@ -127,24 +138,58 @@ public final class RealEars: Ears, @unchecked Sendable {
         registryLock.withLock { registry.renameUser(to: name) }
     }
 
-    // Emit a finalized utterance to the engine and a final line to the UI.
+    // Emit a finalized utterance to the engine and a final line to the UI, with echo
+    // suppression. The two streams (mic and system) finalize independently, so a mic
+    // echo of system audio can arrive in EITHER order relative to the matching system
+    // final. To catch both orders without dropping genuine user speech:
+    //  - a system final is recorded immediately for matching, and delivered.
+    //  - a mic final is checked against already-recorded system finals (forward case);
+    //    and if system audio is currently playing, it is HELD briefly and re-checked,
+    //    so a system final that finalizes slightly later still matches (reverse case).
+    //  - if no system audio is active, the mic final is delivered immediately (a quiet
+    //    room: genuine user speech is never delayed).
     func emitFinal(_ segment: SonioxSegment, source: SpeakerSource) {
         let now = Date()
-        // Echo suppression: record system (remote) finals; drop a mic (user) final that
-        // closely matches a recent system final (the speaker output picked up by the
-        // mic). Genuine user speech has no matching recent system line, so it is kept.
-        let isEcho: Bool = echoLock.withLock {
-            switch source {
-            case .remote: echo.noteSystem(segment.text, at: now); return false
-            case .user: return echo.isEcho(segment.text, at: now)
-            }
-        }
-        if isEcho {
-            // The echo already streamed as a live "You" partial before finalizing, so
-            // clear it; otherwise the dropped line lingers on screen.
-            onClearPartial?(source)
+        if source == .remote {
+            echoLock.withLock { echo.noteSystem(segment.text, at: now) }
+            Self.logEcho(side: "sys", text: segment.text, decision: "kept")
+            deliverFinal(segment, source: .remote, at: now)
             return
         }
+        // Mic (user) final.
+        let (immediateEcho, systemActive): (Bool, Bool) = echoLock.withLock {
+            (echo.isEcho(segment.text, at: now),
+             now.timeIntervalSince(lastSystemActiveAt) < 3.0)
+        }
+        if immediateEcho {
+            Self.logEcho(side: "mic", text: segment.text, decision: "echo(forward)")
+            onClearPartial?(.user)
+            return
+        }
+        guard config.echoSuppression, systemActive else {
+            Self.logEcho(side: "mic", text: segment.text, decision: systemActive ? "kept" : "kept(no-system)")
+            deliverFinal(segment, source: .user, at: now)
+            return
+        }
+        // System audio is playing: hold the mic final, clearing the tentative partial so
+        // an echo never flashes on screen, then re-check after the hold (a matching
+        // system final may finalize during it). Genuine user speech survives the hold.
+        onClearPartial?(.user)
+        let hold = max(0.3, config.echoHoldSeconds)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(hold * 1_000_000_000))
+            guard let self else { return }
+            let echoNow = self.echoLock.withLock { self.echo.isEcho(segment.text, at: now) }
+            if echoNow {
+                Self.logEcho(side: "mic", text: segment.text, decision: "echo(held \(hold)s)")
+            } else {
+                Self.logEcho(side: "mic", text: segment.text, decision: "kept(held \(hold)s)")
+                self.deliverFinal(segment, source: .user, at: now)
+            }
+        }
+    }
+
+    private func deliverFinal(_ segment: SonioxSegment, source: SpeakerSource, at now: Date) {
         let speaker = resolveName(source: source, cluster: segment.speakerLabel)
         // Carry Soniox's per-utterance detected language into the engine so a suggested
         // reply follows the language actually spoken, not the floor config.
@@ -154,6 +199,16 @@ public final class RealEars: Ears, @unchecked Sendable {
         let lang = segment.language.flatMap { Language(rawValue: $0) }
         onLive?(LiveTranscriptLine(id: UUID().uuidString, speaker: speaker, source: source,
                                    cluster: segment.speakerLabel, text: segment.text, language: lang, isFinal: true))
+    }
+
+    // Set MAI_DEBUG_ECHO=1 to see both streams' finals, their arrival times, and the
+    // echo decision, so the inter-arrival delta (which sizes the hold) is readable and
+    // ordering-vs-divergence is distinguishable.
+    nonisolated static func logEcho(side: String, text: String, decision: String) {
+        guard ProcessInfo.processInfo.environment["MAI_DEBUG_ECHO"] == "1" else { return }
+        let stamp = String(format: "%.3f", Date().timeIntervalSince1970)
+        let snippet = text.count > 48 ? String(text.prefix(48)) + "..." : text
+        FileHandle.standardError.write(Data("Mai echo [\(stamp)] \(side): \(decision) | \"\(snippet)\"\n".utf8))
     }
 
     // Emit a live partial line to the UI only (never to the engine).
