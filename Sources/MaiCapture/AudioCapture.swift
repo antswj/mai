@@ -79,6 +79,14 @@ public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         config.queueDepth = 3
 
+        // Acoustic echo cancellation note (verified 2026-06): macOS AEC is the
+        // Voice-Processing IO audio unit, which requires an AVAudioEngine/AudioUnit
+        // INPUT pipeline. The microphone here arrives as a ScreenCaptureKit media
+        // stream (.microphone output), not an audio-unit input, so voice-processing
+        // cannot be hosted on this path cleanly (enabling it reshapes the mic to a
+        // 9-channel format and crashes converters on the realtime thread). We do not
+        // force it; speaker-to-mic echo is removed by the transcript-level
+        // EchoSuppressor backstop instead (and headphones remove it at the source).
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: systemQueue)
         try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: micQueue)

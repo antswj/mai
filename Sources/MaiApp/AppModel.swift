@@ -43,6 +43,8 @@ final class AppModel: ObservableObject {
     @Published var useSimulated: Bool
     @Published var responseEnabled: Bool                // Part B toggle
     @Published var status: String = ""
+    @Published var headphonesTip = false                // one-time tip: headphones remove echo
+    @Published var hudMaxHeight: CGFloat = 600           // set by the HUD controller from the screen
 
     // Step 3: chat assistant, notes pipeline, modes, spend, onboarding and keys.
     @Published var chat: [ChatMessage] = []
@@ -166,6 +168,7 @@ final class AppModel: ObservableObject {
             ears.usage = usage; eyes.usage = usage
             realEars = ears; realEyes = eyes; simEars = nil; simEyes = nil
             ears.onLive = { [weak self] line in Task { @MainActor in self?.ingestLive(line) } }
+            ears.onClearPartial = { [weak self] source in Task { @MainActor in self?.clearPartial(source) } }
             // Let the eyes feed the active-speaker name into the ears' naming layer.
             ears.highlightProvider = { [weak eyes] in eyes?.currentHighlightedName }
             runTask = Task { await engine.run(mergedStream(ears: ears, eyes: eyes)) }
@@ -226,6 +229,15 @@ final class AppModel: ObservableObject {
     }
     var launchAtLogin: Bool { LoginItem.isEnabled }
 
+    // Show once: headphones remove speaker-to-mic echo entirely. The transcript-level
+    // suppression works without them; this is just the cleanest-separation tip.
+    private func maybeShowHeadphonesTip() {
+        guard !UserDefaults.standard.bool(forKey: "mai.headphonesTipShown") else { return }
+        UserDefaults.standard.set(true, forKey: "mai.headphonesTipShown")
+        headphonesTip = true
+    }
+    func dismissHeadphonesTip() { headphonesTip = false }
+
     private func startCapture() async {
         guard let ears = realEars, let eyes = realEyes else { return }
         // Gate on BOTH permissions before any SCStream starts. Requesting the mic
@@ -244,6 +256,7 @@ final class AppModel: ObservableObject {
             captureState = .capturing
             status = "Capturing. Speak near the mic; advance a slide to test the screen."
             startWatchdog()
+            maybeShowHeadphonesTip()
         } catch {
             // Permissions were already granted (gated above), so this is a transient
             // capture error: retry automatically rather than dropping to simulated.
@@ -382,6 +395,11 @@ final class AppModel: ObservableObject {
         }
     }
     private func partialID(_ source: SpeakerSource) -> String { "live-\(source.rawValue)" }
+    // Remove the in-flight partial for a source without appending a final. Used when a
+    // mic echo final is dropped, so the already-shown "You" partial does not linger.
+    private func clearPartial(_ source: SpeakerSource) {
+        liveLines.removeAll { $0.id == partialID(source) }
+    }
     private func lineWithID(_ line: LiveTranscriptLine, _ id: String) -> LiveTranscriptLine {
         LiveTranscriptLine(id: id, speaker: line.speaker, source: line.source, text: line.text,
                            language: line.language, translation: line.translation, isFinal: line.isFinal)
