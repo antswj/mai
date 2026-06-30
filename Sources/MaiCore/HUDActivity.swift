@@ -5,29 +5,40 @@ import Foundation
 // reflects these decisions.
 
 public struct HUDActivityInput: Sendable, Equatable {
-    public var speaking: Bool        // the VAD reports voice activity
-    public var hasActiveCards: Bool  // at least one currently-relevant card
-    public var summoned: Bool        // the user summoned it recently (hotkey/menu), within a grace window
-    public var pinned: Bool          // the user pinned the HUD open
-    public var appWindowOpen: Bool   // the full app window is open (it takes over)
-    public var paused: Bool          // capture is paused (privacy valve)
-    public init(speaking: Bool, hasActiveCards: Bool, summoned: Bool, pinned: Bool, appWindowOpen: Bool, paused: Bool) {
-        self.speaking = speaking; self.hasActiveCards = hasActiveCards; self.summoned = summoned
-        self.pinned = pinned; self.appWindowOpen = appWindowOpen; self.paused = paused
+    public var noteTaking: Bool             // a note-taking session is on (active session)
+    public var hasActiveCards: Bool         // at least one currently-relevant card
+    public var secondsSinceActivity: Double // time since the last speech, partial, or card
+    public var idleHideSeconds: Double      // sustained idle before hiding (tens of seconds)
+    public var summoned: Bool               // summoned recently (hotkey/menu), within a grace window
+    public var pinned: Bool                 // the user pinned the HUD open
+    public var appWindowOpen: Bool          // the full app window is open (it takes over)
+    public var paused: Bool                 // capture is paused (privacy valve)
+    public init(noteTaking: Bool, hasActiveCards: Bool, secondsSinceActivity: Double,
+                idleHideSeconds: Double = HUDActivity.defaultIdleHideSeconds,
+                summoned: Bool, pinned: Bool, appWindowOpen: Bool, paused: Bool) {
+        self.noteTaking = noteTaking; self.hasActiveCards = hasActiveCards
+        self.secondsSinceActivity = secondsSinceActivity; self.idleHideSeconds = idleHideSeconds
+        self.summoned = summoned; self.pinned = pinned; self.appWindowOpen = appWindowOpen; self.paused = paused
     }
 }
 
 public enum HUDActivity {
-    // Mission mode is the resting 24/7 state. It shows when there is something
-    // relevant (speech, a card, or an explicit summon) and hides when idle (VAD
-    // silence AND no active cards). The full app window takes over when open; a pinned
-    // HUD stays; a paused Mai shows nothing unless explicitly summoned.
+    // The HUD must ride through the natural pauses of a conversation, so it does NOT
+    // hide on the VAD's short per-utterance silence. It stays visible while there is
+    // an active session (note-taking), an ongoing conversation (any activity within
+    // the idle window), or a current card, and only slides away after a genuinely long
+    // idle. The full app window takes over when open; a pinned HUD never auto-hides; a
+    // paused Mai shows nothing unless explicitly summoned.
+    public static let defaultIdleHideSeconds: Double = 45
+
     public static func shouldShow(_ i: HUDActivityInput) -> Bool {
         if i.appWindowOpen { return false }
         if i.summoned { return true }
         if i.pinned { return true }
         if i.paused { return false }
-        return i.speaking || i.hasActiveCards
+        if i.noteTaking { return true }                       // active session: stay put
+        if i.hasActiveCards { return true }                   // a card is showing: stay put
+        return i.secondsSinceActivity < i.idleHideSeconds     // recent talk: ride the pauses
     }
 }
 
