@@ -34,7 +34,8 @@ public struct Config: Sendable {
     public var sttLanguageHints: [String]
     public var sttLanguageId: Bool
     public var sttDiarization: Bool
-    public var sttTranslation: Bool
+    public var sttTranslation: Bool          // live-transcript translation toggle (default off)
+    public var translationEngine: String     // which TranslationProvider ("soniox" now)
     public var screenSettleSeconds: Double
     public var screenFrameIntervalSeconds: Double
     public var captureSource: String
@@ -88,6 +89,7 @@ public struct Config: Sendable {
         sttLanguageId: Bool = true,
         sttDiarization: Bool = true,
         sttTranslation: Bool = false,
+        translationEngine: String = "soniox",
         screenSettleSeconds: Double = 1.0,
         screenFrameIntervalSeconds: Double = 1.0,
         captureSource: String = "main_display",
@@ -119,6 +121,7 @@ public struct Config: Sendable {
         self.testLat = testLat; self.testLng = testLng
         self.sttModel = sttModel; self.sttSampleRate = sttSampleRate; self.sttLanguageHints = sttLanguageHints
         self.sttLanguageId = sttLanguageId; self.sttDiarization = sttDiarization; self.sttTranslation = sttTranslation
+        self.translationEngine = translationEngine
         self.screenSettleSeconds = screenSettleSeconds; self.screenFrameIntervalSeconds = screenFrameIntervalSeconds
         self.captureSource = captureSource; self.startPaused = startPaused
         self.showLiveTranscript = showLiveTranscript; self.ruby = ruby
@@ -169,6 +172,7 @@ public struct Config: Sendable {
         if let v = bln("stt", "enable_language_identification") { c.sttLanguageId = v }
         if let v = bln("stt", "enable_speaker_diarization") { c.sttDiarization = v }
         if let v = bln("stt", "translation") { c.sttTranslation = v }
+        if let v = str("stt", "translation_engine") { c.translationEngine = v }
         if let v = str("vision", "model") { c.screenModel = v }  // Gemini vision model for screen reads
         if let v = dbl("screen", "settle_seconds") { c.screenSettleSeconds = v }
         if let v = dbl("screen", "frame_interval_seconds") { c.screenFrameIntervalSeconds = v }

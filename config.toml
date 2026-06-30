@@ -21,7 +21,8 @@ sample_rate = 16000
 language_hints = ["en", "ja", "zh"]
 enable_language_identification = true
 enable_speaker_diarization = true   # on the remote (system audio) side
-translation = false                 # enable if it helps produce info-language text
+translation = false                 # live-transcript translation (also the "Translate" switch); target = interface language
+translation_engine = "soniox"       # TranslationProvider: "soniox" (same-stream, instant). A model-based engine could replace it here.
 
 [vision]
 model = "gemini-2.5-flash"          # Gemini Flash-family vision model for screen reads (verified 2026-06)

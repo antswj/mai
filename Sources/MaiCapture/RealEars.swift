@@ -197,8 +197,19 @@ public final class RealEars: Ears, @unchecked Sendable {
                                     isFinal: true, language: segment.language)
         cont.yield(event)
         let lang = segment.language.flatMap { Language(rawValue: $0) }
+        // The translation line is shown only when it differs from the original (when the
+        // spoken language is already the interface language, Soniox returns the same text,
+        // so there is nothing useful to show beneath).
+        let translation = Self.usefulTranslation(segment.translation, original: segment.text)
         onLive?(LiveTranscriptLine(id: UUID().uuidString, speaker: speaker, source: source,
-                                   cluster: segment.speakerLabel, text: segment.text, language: lang, isFinal: true))
+                                   cluster: segment.speakerLabel, text: segment.text, language: lang,
+                                   translation: translation, isFinal: true))
+    }
+
+    // Drop a translation that just echoes the original (same language case) or is empty.
+    public static func usefulTranslation(_ translation: String?, original: String) -> String? {
+        guard let t = translation?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+        return t.caseInsensitiveCompare(original.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame ? nil : t
     }
 
     // Set MAI_DEBUG_ECHO=1 to see both streams' finals, their arrival times, and the
@@ -211,12 +222,16 @@ public final class RealEars: Ears, @unchecked Sendable {
         FileHandle.standardError.write(Data("Mai echo [\(stamp)] \(side): \(decision) | \"\(snippet)\"\n".utf8))
     }
 
-    // Emit a live partial line to the UI only (never to the engine).
-    func emitPartial(_ text: String, speakerLabel: String?, language: String?, source: SpeakerSource, lineId: String) {
+    // Emit a live partial line to the UI only (never to the engine). The live
+    // translation streams in alongside the partial (same Soniox stream), so it is as
+    // instant as the transcript.
+    func emitPartial(_ text: String, speakerLabel: String?, language: String?, translation: String?,
+                     source: SpeakerSource, lineId: String) {
         guard !text.isEmpty else { return }
         let speaker = resolveName(source: source, cluster: speakerLabel)
         let lang = language.flatMap { Language(rawValue: $0) }
-        onLive?(LiveTranscriptLine(id: lineId, speaker: speaker, source: source,
-                                   cluster: speakerLabel, text: text, language: lang, isFinal: false))
+        onLive?(LiveTranscriptLine(id: lineId, speaker: speaker, source: source, cluster: speakerLabel,
+                                   text: text, language: lang,
+                                   translation: Self.usefulTranslation(translation, original: text), isFinal: false))
     }
 }

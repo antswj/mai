@@ -12,7 +12,14 @@ struct LiveTranscriptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Live transcript").font(.headline)
+            HStack {
+                Text("Live transcript").font(.headline)
+                Spacer()
+                Toggle("Translate", isOn: Binding(get: { model.translationOn },
+                                                  set: { _ in model.toggleTranslation() }))
+                    .toggleStyle(.switch).controlSize(.small)
+                    .help("Show each line translated into \(model.config.interfaceLanguage.rawValue.uppercased()) beneath it")
+            }
             Divider()
             if model.liveLines.isEmpty {
                 Spacer()

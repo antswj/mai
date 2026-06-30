@@ -89,8 +89,13 @@ public struct SonioxSegment: Sendable, Equatable {
     public let text: String
     public let speakerLabel: String?
     public let language: String?
-    public init(text: String, speakerLabel: String?, language: String?) {
-        self.text = text; self.speakerLabel = speakerLabel; self.language = language
+    // The interface-language translation that rode the same stream (Soniox one-way
+    // translation), when translation is enabled. nil when off. Best-effort per segment:
+    // translation tokens lag the originals and may straddle the endpoint marker, so a
+    // boundary chunk can be slightly off; the translation is a helper line, not a record.
+    public let translation: String?
+    public init(text: String, speakerLabel: String?, language: String?, translation: String? = nil) {
+        self.text = text; self.speakerLabel = speakerLabel; self.language = language; self.translation = translation
     }
 }
 
@@ -101,6 +106,11 @@ public final class SonioxSegmenter {
     private var finalText = ""
     private var speaker: String?
     private var language: String?
+    // Translation accumulators (Soniox one-way translation rides the same stream, tagged
+    // translation_status == "translation"). Translation tokens lag the originals and may
+    // arrive after the endpoint marker, so the final translation is paired best-effort
+    // with the original segment that just closed.
+    private var translationFinal = ""
 
     public init() {}
 
@@ -108,27 +118,61 @@ public final class SonioxSegmenter {
         public let live: String
         public let liveSpeaker: String?
         public let liveLanguage: String?
+        public let liveTranslation: String?
         public let finals: [SonioxSegment]
+        public init(live: String, liveSpeaker: String?, liveLanguage: String?,
+                    liveTranslation: String?, finals: [SonioxSegment]) {
+            self.live = live; self.liveSpeaker = liveSpeaker; self.liveLanguage = liveLanguage
+            self.liveTranslation = liveTranslation; self.finals = finals
+        }
     }
 
     public func ingest(_ message: SonioxMessage) -> Update {
         var finals: [SonioxSegment] = []
         var partial = ""
+        var translationPartial = ""
+        // Index (into THIS ingest's finals) of the segment that just closed, so a
+        // translation chunk arriving right after the endpoint marker in the same message
+        // attaches to it instead of bleeding into the next line. Local: a segment from a
+        // prior ingest was already returned and cannot be amended.
+        var lastSegmentIndex: Int?
         for token in message.tokens ?? [] {
             if token.isEndpointMarker {
                 if !finalText.isEmpty {
-                    finals.append(SonioxSegment(text: finalText, speakerLabel: speaker, language: language))
-                    finalText = ""
+                    finals.append(SonioxSegment(text: finalText, speakerLabel: speaker,
+                                                language: language, translation: emptyToNil(translationFinal)))
+                    lastSegmentIndex = finals.count - 1
+                    finalText = ""; translationFinal = ""
                 }
                 continue
             }
-            // Skip translated tokens here; the line carries the original speech.
-            if token.translationStatus == "translation" { continue }
+            if token.translationStatus == "translation" {
+                // Translation of the current (or just-closed) utterance, in the target
+                // language. Final translation tokens accumulate; partials show live.
+                if token.isFinal == true {
+                    if finalText.isEmpty, let idx = lastSegmentIndex, idx < finals.count {
+                        // The original segment already closed this ingest; attach the late
+                        // translation chunk to it rather than bleeding into the next line.
+                        let s = finals[idx]
+                        finals[idx] = SonioxSegment(text: s.text, speakerLabel: s.speakerLabel,
+                                                    language: s.language,
+                                                    translation: emptyToNil((s.translation ?? "") + token.text))
+                    } else {
+                        translationFinal += token.text
+                    }
+                } else {
+                    translationPartial += token.text
+                }
+                continue
+            }
+            // Original speech token.
             if token.isFinal == true {
                 if let s = token.speaker, s != speaker, !finalText.isEmpty {
                     // Speaker changed mid-stream: close the previous line first.
-                    finals.append(SonioxSegment(text: finalText, speakerLabel: speaker, language: language))
-                    finalText = ""
+                    finals.append(SonioxSegment(text: finalText, speakerLabel: speaker,
+                                                language: language, translation: emptyToNil(translationFinal)))
+                    lastSegmentIndex = finals.count - 1
+                    finalText = ""; translationFinal = ""
                 }
                 if let s = token.speaker { speaker = s }
                 if let l = token.language { language = l }
@@ -138,14 +182,21 @@ public final class SonioxSegmenter {
             }
         }
         let live = finalText + partial
-        return Update(live: live, liveSpeaker: speaker, liveLanguage: language, finals: finals)
+        let liveTranslation = emptyToNil(translationFinal + translationPartial)
+        return Update(live: live, liveSpeaker: speaker, liveLanguage: language,
+                      liveTranslation: liveTranslation, finals: finals)
     }
 
     /// Flush any remaining final text as a segment (call on stream end).
     public func flush() -> SonioxSegment? {
         guard !finalText.isEmpty else { return nil }
-        let seg = SonioxSegment(text: finalText, speakerLabel: speaker, language: language)
-        finalText = ""
+        let seg = SonioxSegment(text: finalText, speakerLabel: speaker, language: language,
+                                translation: emptyToNil(translationFinal))
+        finalText = ""; translationFinal = ""
         return seg
+    }
+
+    private func emptyToNil(_ s: String) -> String? {
+        s.trimmingCharacters(in: .whitespaces).isEmpty ? nil : s
     }
 }
