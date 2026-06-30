@@ -15,15 +15,28 @@ struct MissionHUDView: View {
         return .listening
     }
 
+    // Chrome (header + paddings) subtracted from the panel's max height to get the
+    // height available to the content areas.
+    private let chrome: CGFloat = 72
+
     var body: some View {
-        GlassStack(spacing: 14) {
+        let cards = visibleCards
+        // Available content height, capped at the panel max (down to just above the Dock).
+        let content = max(140, model.hudMaxHeight - chrome)
+        let split = HUDLayout.split(availableHeight: Double(content), hasCards: !cards.isEmpty)
+
+        return GlassStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 header
                 if showAsk {
-                    ChatView(model: model, compact: true).frame(height: 240)
+                    ChatView(model: model, compact: true).frame(height: content)
                 } else {
-                    transcript
-                    if let card = topCard { MiniCard(card: card, ruby: model.config.ruby) }
+                    // Transcript on top (about 60 percent when cards are shown, full
+                    // height otherwise); cards below (about 40 percent), each scrolling.
+                    transcriptArea.frame(height: CGFloat(split.transcript))
+                    if !cards.isEmpty {
+                        cardsArea(cards).frame(height: CGFloat(split.cards))
+                    }
                 }
             }
             .padding(14)
@@ -36,6 +49,10 @@ struct MissionHUDView: View {
             .shadow(color: .black.opacity(0.28), radius: 20, y: 10)
         }
         .padding(10)
+    }
+
+    private var visibleCards: [RichCard] {
+        Array(model.richItems.filter { !$0.suppressed }.prefix(8))
     }
 
     private var header: some View {
@@ -59,21 +76,40 @@ struct MissionHUDView: View {
         .foregroundStyle(.secondary)
     }
 
-    private var transcript: some View {
-        let recent = Array(model.liveLines.suffix(2))
-        return VStack(alignment: .leading, spacing: 6) {
-            if recent.isEmpty {
-                Text(model.isPaused ? "Paused" : "Listening\u{2026}")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(recent.enumerated()), id: \.element.id) { idx, line in
-                    TranscriptLineView(line: line, active: idx == recent.count - 1, ruby: model.config.ruby)
+    // The transcript area: as many recent lines as fit, scrolling within its height,
+    // pinned to the newest (the active line emphasized).
+    private var transcriptArea: some View {
+        let lines = Array(model.liveLines.suffix(40))
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if lines.isEmpty {
+                        Text(model.isPaused ? "Paused" : "Listening\u{2026}")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                            TranscriptLineView(line: line, active: idx == lines.count - 1, ruby: model.config.ruby)
+                                .id(line.id)
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: model.liveLines.count) {
+                if let last = lines.last { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
     }
 
-    private var topCard: RichCard? { model.richItems.first { !$0.suppressed } }
+    // The cards area: the recent cards, newest first, scrolling within its height.
+    private func cardsArea(_ cards: [RichCard]) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(cards) { card in MiniCard(card: card, ruby: model.config.ruby) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 }
 
 // A compact card for the HUD: headline, a few lines of info or the reply, a source.

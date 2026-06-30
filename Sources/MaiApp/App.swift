@@ -119,7 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func tickHUD() {
         guard let hud, !model.appWindowOpen else { hud?.hide(); return }
-        if model.shouldShowHUD { if !hud.isVisible { hud.show() } }
+        if model.shouldShowHUD {
+            if !hud.isVisible { hud.show() }
+            else { hud.repin() }   // resize as content grows/shrinks (screen-param events do not fire for that)
+        }
         else if hud.isVisible { hud.hide() }
     }
 
