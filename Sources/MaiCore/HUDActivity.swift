@@ -67,30 +67,14 @@ public enum HUDLayout {
         max(120, h - inset - bottomGap)
     }
 
-    // Split the available height into a transcript area (top) and a cards area (bottom)
-    // when both are shown: about 60 percent transcript over 40 percent cards. With no
-    // cards, the transcript takes the full height. (Used by the older fixed layout and
-    // kept for reference; the content-driven layout uses regionHeights below.)
+    // Split the available height into a transcript area (top) and a cards area (bottom):
+    // about 60 percent transcript over 40 percent cards when both are shown, and the
+    // transcript taking the full height when there are no cards. The Mission HUD uses
+    // this for its generous active layout (and a fixed modest transcript at rest).
     public static func split(availableHeight h: Double, hasCards: Bool, transcriptFraction: Double = 0.6)
         -> (transcript: Double, cards: Double) {
         guard hasCards else { return (h, 0) }
         let t = (h * transcriptFraction).rounded()
         return (t, h - t)
-    }
-
-    // Content-driven region heights: each region is its natural content height, capped so
-    // the whole HUD never exceeds maxContent. The cards area is capped at 40 percent of
-    // the max (so a long card list cannot crowd out the transcript), and the transcript
-    // takes whatever is left up to the max. The result: the HUD is COMPACT when content
-    // is short (each region sizes to its content), grows as content lengthens, and only
-    // settles into the ~60/40 split when both regions overflow. With no cards the
-    // transcript may use the full height.
-    public static func regionHeights(transcriptNatural: Double, cardsNatural: Double,
-                                     maxContent: Double, hasCards: Bool, cardsFraction: Double = 0.4)
-        -> (transcript: Double, cards: Double, total: Double) {
-        let cards = hasCards ? min(max(0, cardsNatural), (maxContent * cardsFraction).rounded()) : 0
-        let transcriptCap = max(0, maxContent - cards)
-        let transcript = min(max(0, transcriptNatural), transcriptCap)
-        return (transcript, cards, transcript + cards)
     }
 }

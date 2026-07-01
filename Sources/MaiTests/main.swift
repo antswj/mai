@@ -1245,21 +1245,15 @@ do {
     check(nilOut == nil, "inline provider does not translate per line (it already rode the stream)")
 }
 
-section("HUD content sizing: compact when short, grows, caps, 60/40 only under pressure")
+section("HUD 60/40 split (active) and transcript-full (resting)")
 do {
-    let maxC = 600.0
-    // Short transcript, no cards: HUD is just the content height (compact), not the max.
-    let short = HUDLayout.regionHeights(transcriptNatural: 80, cardsNatural: 0, maxContent: maxC, hasCards: false)
-    check(short.transcript == 80 && short.cards == 0 && short.total == 80, "compact: sizes to content, not the max")
-    // A small card lets the transcript take the rest (not forced to 60 percent).
-    let small = HUDLayout.regionHeights(transcriptNatural: 1000, cardsNatural: 60, maxContent: maxC, hasCards: true)
-    check(small.cards == 60, "a small card stays its natural height")
-    check(small.transcript == maxC - 60, "the transcript takes the remaining height")
-    // Both overflow: cards capped at 40 percent, transcript at the remaining 60 percent.
-    let full = HUDLayout.regionHeights(transcriptNatural: 1000, cardsNatural: 1000, maxContent: maxC, hasCards: true)
-    check(full.cards == (maxC * 0.4).rounded(), "cards capped at 40 percent under pressure")
-    check(full.transcript == maxC - full.cards, "transcript takes the other 60 percent")
-    check(full.total <= maxC + 0.5, "total never exceeds the max")
+    // With cards present, the HUD uses a generous ~60/40 transcript-over-cards split.
+    let s = HUDLayout.split(availableHeight: 600, hasCards: true)
+    check(abs(s.transcript - 360) < 1 && abs(s.cards - 240) < 1, "cards present: about 60 percent transcript, 40 percent cards")
+    // With no cards, the transcript region is the whole content height (the view caps
+    // it to a modest resting height, but the split math gives it everything).
+    let none = HUDLayout.split(availableHeight: 600, hasCards: false)
+    check(none.transcript == 600 && none.cards == 0, "no cards: transcript takes the full height")
 }
 
 section("Pinned carousel index logic")

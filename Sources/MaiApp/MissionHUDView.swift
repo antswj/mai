@@ -1,24 +1,24 @@
 import SwiftUI
 import MaiCore
 
-// Report the natural content height of each HUD region so it can be sized to its
-// content (compact) and only scroll when it overflows.
-private struct TranscriptHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-private struct CardsHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
-// Mission mode: a calm, glassy, hovering heads-up display. Glass surface (functional
-// layer), a soft rim light and shadow for depth, a living glow as Mai's presence,
-// white legible vibrant text, and need-to-know density: the active transcript line or
-// two, the one card that matters now, and an ask affordance. Never a dump.
+// Mission mode: a calm, glassy, hovering heads-up display. Real Liquid Glass surface
+// (functional layer), a living glow as Mai's presence, vibrant legible text, and
+// need-to-know density. Two discrete heights: compact at rest (header + a modest
+// auto-following transcript), and a generous 60/40 transcript-over-cards split when
+// cards are present. The transcript auto-follows the newest line (so the current
+// conversation is always visible without scrolling) while remaining scrollable for
+// history.
 struct MissionHUDView: View {
     @ObservedObject var model: AppModel
     @State private var showAsk = false
+    // The transcript sticks to the newest line only while the user is at the bottom;
+    // if they scroll up to read history, new lines do not yank them back down.
+    @State private var atBottom = true
+
+    // Header + paddings, subtracted from the panel max to get the content height.
+    private let chrome: CGFloat = 76
+    // The compact transcript region shown at rest (no cards): several lines, auto-following.
+    private let restingTranscript: CGFloat = 168
 
     private var presence: LivingGlow.Presence {
         if model.assistantThinking { return .thinking }
@@ -26,47 +26,37 @@ struct MissionHUDView: View {
         return .listening
     }
 
-    // Chrome (header + paddings) subtracted from the panel's max height to get the
-    // height available to the content areas.
-    private let chrome: CGFloat = 72
-    // Measured natural heights of the transcript and cards content, so each region can
-    // be sized to its content (compact) and only scroll when it overflows.
-    @State private var transcriptNatural: CGFloat = 0
-    @State private var cardsNatural: CGFloat = 0
-
     var body: some View {
         let cards = visibleCards
-        // Available content height, capped at the panel max (down to just above the Dock).
-        let maxContent = max(140, model.hudMaxHeight - chrome)
-        // Content-driven: each region is its natural height, capped so the HUD never
-        // exceeds the max and the cards never crowd out the transcript. Compact when
-        // short, grows with content, ~60/40 only once both overflow.
-        let h = HUDLayout.regionHeights(transcriptNatural: Double(transcriptNatural),
-                                        cardsNatural: Double(cardsNatural),
-                                        maxContent: Double(maxContent), hasCards: !cards.isEmpty)
+        let hasCards = !cards.isEmpty
+        // Two discrete heights (no continuous content measurement, which flapped before):
+        // compact at rest, generous 60/40 transcript-over-cards when cards are present.
+        let maxContent = max(240, model.hudMaxHeight - chrome)
+        let split = HUDLayout.split(availableHeight: Double(maxContent), hasCards: hasCards)
+        let transcriptH = hasCards ? CGFloat(split.transcript) : restingTranscript
 
-        return GlassStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 10) {
+        return GlassStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 header
                 if showAsk {
                     ChatView(model: model, compact: true).frame(height: maxContent)
                 } else {
-                    transcriptArea.frame(height: max(28, CGFloat(h.transcript)))
-                    if !cards.isEmpty {
-                        cardsArea(cards).frame(height: CGFloat(h.cards))
+                    transcriptArea.frame(height: transcriptH)   // ~60% with cards, modest at rest
+                    if hasCards {
+                        Divider().opacity(0.25)
+                        cardsArea(cards).frame(height: CGFloat(split.cards))   // ~40%
                     }
                 }
             }
-            .padding(14)
-            .frame(width: 364)
-            .animation(.easeInOut(duration: 0.22), value: h.transcript)
-            .animation(.easeInOut(duration: 0.22), value: h.cards)
-            // Real Liquid Glass renders its own light-aware edge and adapts to whatever
-            // is behind it (darkens over white, lightens over dark), so there is NO
-            // manual stroke/border: a hand-drawn border is exactly the hard edge the
-            // glass is meant to avoid. The shadow alone gives the hovering depth.
-            .functionalGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .shadow(color: .black.opacity(0.28), radius: 20, y: 10)
+            .padding(16)
+            .frame(width: 384)
+            .animation(.easeInOut(duration: 0.28), value: hasCards)
+            // Real Liquid Glass on the functional layer: the clear variant is the most
+            // text-forward, glassiest surface, and it renders its own light-aware edge
+            // and adapts to what is behind it, so there is NO manual border (a drawn
+            // stroke is the hard edge glass is meant to avoid). The shadow gives depth.
+            .missionGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .shadow(color: .black.opacity(0.32), radius: 24, y: 12)
         }
         .padding(10)
     }
@@ -114,11 +104,13 @@ struct MissionHUDView: View {
         .foregroundStyle(.secondary)
     }
 
-    // The transcript area: a small recent window so the HUD stays compact (the full
-    // transcript is in the app). A bounded window keeps the measured natural height
-    // small, so the panel sizes down to its content instead of pinning near the Dock.
+    // The transcript area: the full recent history (bounded by the fixed region height,
+    // scrollable for older lines), auto-FOLLOWING the newest line so the current
+    // conversation is always visible without scrolling. Single owner of the follow: it
+    // scrolls to the newest line only while the user is already at the bottom, so
+    // scrolling up to read history is never yanked back down by a new line.
     private var transcriptArea: some View {
-        let lines = Array(model.liveLines.suffix(6))
+        let lines = model.liveLines
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
@@ -133,34 +125,35 @@ struct MissionHUDView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(GeometryReader { g in   // measure NATURAL content height for sizing
-                    Color.clear.preference(key: TranscriptHeightKey.self, value: g.size.height)
-                })
             }
+            // True when the scroll is at (or near) the bottom; drives whether to follow.
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 40
+            } action: { _, nowAtBottom in atBottom = nowAtBottom }
             .onChange(of: model.liveLines.count) {
-                if let last = lines.last { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                guard atBottom, let last = lines.last else { return }   // follow only when at the bottom
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
-            .onPreferenceChange(TranscriptHeightKey.self) { transcriptNatural = $0 }
+            .onAppear { if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) } }
         }
     }
 
     // The cards area: the recent cards, newest first, scrolling within its height.
     private func cardsArea(_ cards: [RichCard]) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(cards) { card in
                     MiniCard(card: card, ruby: model.config.ruby,
                              pinned: model.isPinned(card.id), expanded: model.isExpanded(card.id),
                              onTogglePin: { model.isPinned(card.id) ? model.unpin(card.id) : model.pin(card) },
                              onToggleExpand: { withAnimation(.easeInOut(duration: 0.2)) { model.toggleExpand(card.id) } })
+                        // A quiet entrance so a new card feels alive, not a jump-cut.
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(GeometryReader { g in
-                Color.clear.preference(key: CardsHeightKey.self, value: g.size.height)
-            })
+            .animation(.easeInOut(duration: 0.25), value: cards.map(\.id))
         }
-        .onPreferenceChange(CardsHeightKey.self) { cardsNatural = $0 }
     }
 }
 
@@ -176,45 +169,53 @@ struct MiniCard: View {
     var onToggleExpand: (() -> Void)?
     private var hasImage: Bool { (card.imageURL.flatMap(URL.init(string:))) != nil }
 
+    private var tint: Color {
+        switch card.tier { case .critical: return .red; case .medium: return .blue; case .noise: return .gray }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 0) {
+            // A slim tier accent so a card reads as present and its urgency is glanceable.
+            RoundedRectangle(cornerRadius: 2).fill(tint.opacity(0.85)).frame(width: 3)
+                .padding(.trailing, 10)
+            VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
-                Text(card.headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    .lineLimit(expanded ? nil : 1)
+                Text(card.headline).font(.headline).foregroundStyle(.primary)
+                    .lineLimit(expanded ? nil : 2)
                 Spacer()
                 if onToggleExpand != nil {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if let onTogglePin {
                     Button(action: onTogglePin) {
                         Image(systemName: pinned ? "pin.fill" : "pin")
-                            .font(.caption2).foregroundStyle(pinned ? Color.accentColor : Color.secondary)
+                            .font(.caption).foregroundStyle(pinned ? Color.accentColor : Color.secondary)
                     }
                     .buttonStyle(.plain).accessibilityLabel(pinned ? "Unpin card" : "Pin card")
                 }
             }
 
-            // Image: a small thumbnail collapsed, a larger image when expanded.
+            // Image: a thumbnail collapsed, a larger image when expanded.
             if let urlStr = card.imageURL, let url = URL(string: urlStr) {
                 AsyncImage(url: url) { phase in
                     if case .success(let image) = phase {
                         image.resizable().scaledToFill()
                             .frame(maxWidth: .infinity)
-                            .frame(height: expanded ? 130 : 56)
-                            .clipped().clipShape(RoundedRectangle(cornerRadius: 8))
+                            .frame(height: expanded ? 160 : 84)
+                            .clipped().clipShape(RoundedRectangle(cornerRadius: 10))
                     } else {
-                        RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
-                            .frame(height: expanded ? 130 : 56)
+                        RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.12))
+                            .frame(height: expanded ? 160 : 84)
                     }
                 }
             } else if card.isPending(.image) {
-                RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12)).frame(height: 56)
+                RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.12)).frame(height: 84)
                     .overlay(ProgressView().controlSize(.small))
             }
 
             if let info = card.info, !info.isEmpty {
-                Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(expanded ? nil : 3)
+                Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(expanded ? nil : 4)
             } else if card.isLoading {
                 ProgressView().controlSize(.small)
             }
@@ -226,7 +227,7 @@ struct MiniCard: View {
             if let r = card.response {
                 Divider().opacity(0.4)
                 if ruby && r.language != .en {
-                    RubyLineView(units: Readings.units(r.spoken, language: r.language), baseFont: 15)
+                    RubyLineView(units: Readings.units(r.spoken, language: r.language), baseFont: 16)
                 } else {
                     Text(r.spoken).font(.callout.weight(.medium)).foregroundStyle(.primary)
                 }
@@ -249,11 +250,17 @@ struct MiniCard: View {
             } else if let first = sources.first {
                 Text(first.title).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
+            }
         }
-        .padding(10)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+        .padding(12)
+        // Translucent, not opaque, so the Liquid Glass surface reads THROUGH the card
+        // (present but not a solid slab), with a faint tier tint and a soft shadow for
+        // depth. Content stays content; only the surface below is glass.
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
         // Tap the card body (not the buttons) to expand/collapse.
-        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .contentShape(RoundedRectangle(cornerRadius: 16))
         .onTapGesture { onToggleExpand?() }
     }
 }

@@ -285,12 +285,16 @@ With real capture (`open Mai.app`, permissions granted):
     cards area and stops auto-dismissing. Pin a few and swipe (or use the arrows and
     page dots) to page through them. The X unpins. The note button marks a pinned card
     for the meeting notes, so its content appears in the exported `.docx` and `.md`.
-14. Confirm the Mission mode HUD stays compact: it shows a small recent transcript
-    window and stays small, rather than growing tall as the meeting goes on (the full
-    transcript is in the app). The cards area still grows as cards appear.
-15. In Mission mode, tap a card to expand it: the full info, a larger image, the reply,
-    and the sources appear; tap again to collapse. Card images show in Mission mode
-    (a thumbnail when collapsed, larger when expanded).
+14. Confirm the Mission mode HUD transcript follows the conversation on its own: the
+    current line stays visible without you scrolling, and you can scroll up to read
+    history (a new line while you are scrolled up does not yank you back down; scroll
+    back to the bottom to resume following). At rest (no cards) the HUD is compact; when
+    a card appears it settles into a roughly 60 percent transcript over 40 percent cards
+    layout, each area scrolling on its own.
+15. In Mission mode the cards are larger and read as glassy and present (a tier accent,
+    a translucent surface, a quiet entrance). Tap a card to expand it: the full info, a
+    larger image, the reply, and the sources appear; tap again to collapse. Card images
+    show in Mission mode (a thumbnail when collapsed, larger when expanded).
 16. Mute: click the mic button (in the Mission mode HUD header, the menu bar, or the app
     toolbar). Your own voice stops being transcribed while system audio and the screen
     keep going; click again to unmute. The mute survives an automatic capture restart.

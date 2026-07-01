@@ -45,8 +45,10 @@ struct CardStreamView: View {
                                 Button { model.pin(card) } label: { Image(systemName: "pin") }
                                     .buttonStyle(.plain).help("Pin this card").accessibilityLabel("Pin card")
                             }
+                            .transition(.move(edge: .top).combined(with: .opacity))   // a new card feels alive, not a jump-cut
                         }
                     }
+                    .animation(.easeInOut(duration: 0.25), value: flowing.map(\.id))
                 }
             }
         }
