@@ -9,6 +9,15 @@ struct LiveTranscriptView: View {
     @ObservedObject var model: AppModel
     @State private var renameTarget: LiveTranscriptLine?
     @State private var renameText: String = ""
+    @State private var atBottom = true
+
+    // Changes on ANY transcript update (a new line, a streaming partial growing, or a
+    // partial finalizing into a final), unlike liveLines.count which stays the same
+    // when a partial is replaced by its final. Drives the auto-scroll.
+    private var transcriptSignature: String {
+        guard let last = model.liveLines.last else { return "0" }
+        return "\(model.liveLines.count)|\(last.id)|\(last.text.count)|\(last.translation?.count ?? 0)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -46,11 +55,17 @@ struct LiveTranscriptView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    .onChange(of: model.liveLines.count) {
-                        if let last = model.liveLines.last {
-                            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) }
-                        }
+                    // Follow the newest line as the transcript comes in (including while a
+                    // partial streams), but only while the user is at the bottom, so
+                    // scrolling up to read history is not yanked back down.
+                    .onScrollGeometryChange(for: Bool.self) { geo in
+                        HUDLayout.isAtBottom(contentOffsetY: geo.contentOffset.y, containerHeight: geo.containerSize.height, contentHeight: geo.contentSize.height)
+                    } action: { _, now in atBottom = now }
+                    .onChange(of: transcriptSignature) {
+                        guard atBottom, let last = model.liveLines.last else { return }
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
+                    .onAppear { if let last = model.liveLines.last { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
             }
         }

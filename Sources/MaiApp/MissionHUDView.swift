@@ -26,6 +26,14 @@ struct MissionHUDView: View {
         return .listening
     }
 
+    // Changes on ANY transcript update (new line, a streaming partial growing, or a
+    // partial finalizing), unlike liveLines.count which is unchanged when a partial is
+    // replaced by its final. Drives the auto-scroll.
+    private var transcriptSignature: String {
+        guard let last = model.liveLines.last else { return "0" }
+        return "\(model.liveLines.count)|\(last.id)|\(last.text.count)|\(last.translation?.count ?? 0)"
+    }
+
     var body: some View {
         let cards = visibleCards
         let hasCards = !cards.isEmpty
@@ -128,10 +136,13 @@ struct MissionHUDView: View {
             }
             // True when the scroll is at (or near) the bottom; drives whether to follow.
             .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 40
+                HUDLayout.isAtBottom(contentOffsetY: geo.contentOffset.y, containerHeight: geo.containerSize.height, contentHeight: geo.contentSize.height)
             } action: { _, nowAtBottom in atBottom = nowAtBottom }
-            .onChange(of: model.liveLines.count) {
-                guard atBottom, let last = lines.last else { return }   // follow only when at the bottom
+            // Follow on ANY transcript change (new line, a streaming partial growing, or a
+            // partial finalizing) rather than only on line count, but only while at the
+            // bottom so reading history is not interrupted.
+            .onChange(of: transcriptSignature) {
+                guard atBottom, let last = lines.last else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
             .onAppear { if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) } }
