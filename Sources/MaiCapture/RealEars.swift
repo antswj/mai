@@ -29,12 +29,20 @@ public final class RealEars: Ears, @unchecked Sendable {
     // by the mic). Guarded; mic and system Soniox callbacks touch it concurrently.
     private var echo = EchoSuppressor()
     private let echoLock = NSLock()
-    // When system audio was last actually playing (the system VAD gate forwarded voice).
-    // The mic-final hold is gated on this, so the user's own speech is only delayed
-    // while the speaker is actually producing sound (when echo is possible), not in a
-    // quiet room. Continuous capture does NOT count; only forwarded (voiced) audio.
-    private var lastSystemActiveAt = Date.distantPast
-    func noteSystemActive() { echoLock.withLock { lastSystemActiveAt = Date() } }
+    // Acoustic-echo detection from capture-time energy (robust to how the echo happens
+    // to be transcribed). lastSystemLoudAt: the last moment the SPEAKER was actually
+    // producing sound (system-audio RMS above threshold). lastConcurrentAt: the last
+    // moment the MIC and the SPEAKER were BOTH loud at once (the physical echo
+    // condition). A mic utterance that overlapped speaker output is dropped as echo;
+    // genuine user speech in a quiet room never overlaps, so it is kept.
+    private var lastSystemLoudAt = Date.distantPast
+    private var lastConcurrentAt = Date.distantPast
+    // How close in time mic-loud and speaker-loud must be to count as concurrent (both
+    // are measured at capture, in real time). And how recent that concurrency must be,
+    // relative to a mic final (which lags the speech by the endpoint delay), to treat
+    // the utterance as echo.
+    private let concurrencyWindow: TimeInterval = 0.6
+    private let overlapRecency: TimeInterval = 2.5
 
     // Filled in the capture chunk.
     private var micClient: SonioxClient?
@@ -108,15 +116,27 @@ public final class RealEars: Ears, @unchecked Sendable {
     func feedMic(_ data: Data) {
         if muteLock.withLock({ _micMuted }) { return }   // muted: drop mic audio entirely
         noteCaptured()
+        // Echo detection at capture time: if the mic is loud WHILE the speaker was loud
+        // a moment ago, mic and speaker overlap, i.e. the mic is hearing the speakers.
+        if config.echoSuppression, AudioEnergy.isLoud(data, threshold: Float(config.echoSystemActiveRMS)) {
+            let now = Date()
+            echoLock.withLock {
+                if now.timeIntervalSince(lastSystemLoudAt) < concurrencyWindow { lastConcurrentAt = now }
+            }
+        }
         if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
     }
     func feedSystem(_ data: Data) {
         noteCaptured()
+        // "The speaker is playing" comes from the raw system-audio energy at capture,
+        // not the downstream VAD flag (which has gaps during reconnects and offset lag).
+        if AudioEnergy.isLoud(data, threshold: Float(config.echoSystemActiveRMS)) {
+            echoLock.withLock { lastSystemLoudAt = Date() }
+        }
         if let g = systemGate {
-            g.feed(data)   // the gate calls noteSystemActive via onSent only when it forwards voiced audio
+            g.feed(data)
         } else {
-            // VAD off: system audio streams continuously, so treat it as active.
-            systemClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count); noteSystemActive()
+            systemClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count)
         }
     }
     // Called by the VAD gate when it actually forwards audio to Soniox.
@@ -154,15 +174,12 @@ public final class RealEars: Ears, @unchecked Sendable {
     }
 
     // Emit a finalized utterance to the engine and a final line to the UI, with echo
-    // suppression. The two streams (mic and system) finalize independently, so a mic
-    // echo of system audio can arrive in EITHER order relative to the matching system
-    // final. To catch both orders without dropping genuine user speech:
-    //  - a system final is recorded immediately for matching, and delivered.
-    //  - a mic final is checked against already-recorded system finals (forward case);
-    //    and if system audio is currently playing, it is HELD briefly and re-checked,
-    //    so a system final that finalizes slightly later still matches (reverse case).
-    //  - if no system audio is active, the mic final is delivered immediately (a quiet
-    //    room: genuine user speech is never delayed).
+    // suppression. A mic ("You") final is dropped as echo when EITHER it closely matches
+    // a recent system-audio final (text match, precise) OR its utterance overlapped
+    // speaker output (mic and speaker both loud at once, detected from capture-time
+    // energy in feedMic). The energy overlap is robust to how the echo happened to be
+    // transcribed and to which stream finalized first; genuine user speech in a quiet
+    // room overlaps nothing, so it is kept and never delayed.
     func emitFinal(_ segment: SonioxSegment, source: SpeakerSource) {
         let now = Date()
         if source == .remote {
@@ -171,37 +188,18 @@ public final class RealEars: Ears, @unchecked Sendable {
             deliverFinal(segment, source: .remote, at: now)
             return
         }
-        // Mic (user) final.
-        let (immediateEcho, systemActive): (Bool, Bool) = echoLock.withLock {
+        // Mic (user) final: text-match first (precise), then capture-time concurrency.
+        let (textEcho, overlapped): (Bool, Bool) = echoLock.withLock {
             (echo.isEcho(segment.text, at: now),
-             now.timeIntervalSince(lastSystemActiveAt) < 3.0)
+             now.timeIntervalSince(lastConcurrentAt) < overlapRecency)
         }
-        if immediateEcho {
-            Self.logEcho(side: "mic", text: segment.text, decision: "echo(forward)")
-            onClearPartial?(.user)
+        if config.echoSuppression, textEcho || overlapped {
+            Self.logEcho(side: "mic", text: segment.text, decision: textEcho ? "echo(text)" : "echo(overlap)")
+            onClearPartial?(.user)   // clear the tentative "You" partial so the echo does not linger
             return
         }
-        guard config.echoSuppression, systemActive else {
-            Self.logEcho(side: "mic", text: segment.text, decision: systemActive ? "kept" : "kept(no-system)")
-            deliverFinal(segment, source: .user, at: now)
-            return
-        }
-        // System audio is playing: hold the mic final, clearing the tentative partial so
-        // an echo never flashes on screen, then re-check after the hold (a matching
-        // system final may finalize during it). Genuine user speech survives the hold.
-        onClearPartial?(.user)
-        let hold = max(0.3, config.echoHoldSeconds)
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(hold * 1_000_000_000))
-            guard let self else { return }
-            let echoNow = self.echoLock.withLock { self.echo.isEcho(segment.text, at: now) }
-            if echoNow {
-                Self.logEcho(side: "mic", text: segment.text, decision: "echo(held \(hold)s)")
-            } else {
-                Self.logEcho(side: "mic", text: segment.text, decision: "kept(held \(hold)s)")
-                self.deliverFinal(segment, source: .user, at: now)
-            }
-        }
+        Self.logEcho(side: "mic", text: segment.text, decision: "kept")
+        deliverFinal(segment, source: .user, at: now)
     }
 
     private func deliverFinal(_ segment: SonioxSegment, source: SpeakerSource, at now: Date) {

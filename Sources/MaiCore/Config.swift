@@ -58,7 +58,10 @@ public struct Config: Sendable {
     // held when system audio is active, so a matching system final can be compared
     // regardless of which stream finalizes first.
     public var echoSuppression: Bool
-    public var echoHoldSeconds: Double
+    // RMS threshold (0..1) above which system audio counts as "the speaker is playing",
+    // used to detect mic/speaker concurrency (acoustic echo). Raise it if quiet
+    // background media wrongly suppresses your speech; lower it if echo slips through.
+    public var echoSystemActiveRMS: Double
 
     public init(
         llmProvider: String = "anthropic",
@@ -107,7 +110,7 @@ public struct Config: Sendable {
         vadOnset: Double = 0.5,
         vadOffset: Double = 0.35,
         echoSuppression: Bool = true,
-        echoHoldSeconds: Double = 2.0
+        echoSystemActiveRMS: Double = 0.015
     ) {
         self.llmProvider = llmProvider; self.placesProvider = placesProvider
         self.classifierModel = classifierModel; self.drafterModel = drafterModel; self.screenModel = screenModel
@@ -130,7 +133,8 @@ public struct Config: Sendable {
         self.vadEnabled = vadEnabled; self.vadEngine = vadEngine
         self.vadSilenceHangoverSeconds = vadSilenceHangoverSeconds; self.vadPrerollSeconds = vadPrerollSeconds
         self.vadOnset = vadOnset; self.vadOffset = vadOffset
-        self.echoSuppression = echoSuppression; self.echoHoldSeconds = echoHoldSeconds
+        self.echoSuppression = echoSuppression
+        self.echoSystemActiveRMS = echoSystemActiveRMS
     }
 
     /// Load from a config.toml. Missing file or missing keys fall back to defaults.
@@ -193,7 +197,7 @@ public struct Config: Sendable {
         if let v = dbl("vad", "onset") { c.vadOnset = v }
         if let v = dbl("vad", "offset") { c.vadOffset = v }
         if let v = bln("echo", "suppression") { c.echoSuppression = v }
-        if let v = dbl("echo", "hold_seconds") { c.echoHoldSeconds = v }
+        if let v = dbl("echo", "system_active_rms") { c.echoSystemActiveRMS = v }
         return c
     }
 }

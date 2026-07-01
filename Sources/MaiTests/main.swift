@@ -1076,6 +1076,23 @@ do {
 
 // ============================ Fix pass 2: echo, screen cards, HUD layout ============================
 
+section("Audio energy: RMS detects whether the speaker is actually playing")
+do {
+    // Silence -> ~0; a full-scale tone -> high. This is the capture-time signal that
+    // drives acoustic-echo detection (mic and speaker loud at once), so it must be real.
+    func pcm(_ samples: [Int16]) -> Data {
+        var d = Data(capacity: samples.count * 2)
+        for s in samples { var le = s.littleEndian; withUnsafeBytes(of: &le) { d.append(contentsOf: $0) } }
+        return d
+    }
+    check(AudioEnergy.rms(pcm([Int16](repeating: 0, count: 512))) == 0, "silence has zero RMS")
+    let loud = pcm((0..<512).map { _ in Int16(12000) })
+    check(AudioEnergy.rms(loud) > 0.3, "loud audio has high RMS")
+    check(AudioEnergy.isLoud(loud, threshold: 0.015), "loud audio is above the speaker-active threshold")
+    check(!AudioEnergy.isLoud(pcm((0..<512).map { _ in Int16(100) }), threshold: 0.015), "very quiet audio is not 'playing'")
+    check(AudioEnergy.rms(Data()) == 0, "empty buffer is zero, not a crash")
+}
+
 section("Echo suppression: drops mic echo of system audio, keeps genuine user speech")
 do {
     let t0 = Date(timeIntervalSince1970: 1_780_000_000)
