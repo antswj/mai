@@ -120,9 +120,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func tickHUD() {
         guard let hud, !model.appWindowOpen else { hud?.hide(); return }
+        // Only decide show vs hide here. The panel is a fixed size that fills itself, so
+        // it is never resized per tick (that was the source of the jumping); repin runs
+        // only on show and on a display change.
         if model.shouldShowHUD {
             if !hud.isVisible { hud.show() }
-            else { hud.repin() }   // resize as content grows/shrinks (screen-param events do not fire for that)
         }
         else if hud.isVisible { hud.hide() }
     }

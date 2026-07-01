@@ -54,7 +54,6 @@ final class AppModel: ObservableObject {
     @Published var expandedCardIds: Set<String> = []    // HUD cards expanded to full detail
     @Published var status: String = ""
     @Published var headphonesTip = false                // one-time tip: headphones remove echo
-    @Published var hudMaxHeight: CGFloat = 600           // set by the HUD controller from the screen
 
     // Step 3: chat assistant, notes pipeline, modes, spend, onboarding and keys.
     @Published var chat: [ChatMessage] = []

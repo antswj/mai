@@ -12,11 +12,6 @@ struct MissionHUDView: View {
     @ObservedObject var model: AppModel
     @State private var showAsk = false
 
-    // Header + paddings, subtracted from the panel max to get the content height.
-    private let chrome: CGFloat = 76
-    // The compact transcript region shown at rest (no cards): several lines, auto-following.
-    private let restingTranscript: CGFloat = 168
-
     private var presence: LivingGlow.Presence {
         if model.assistantThinking { return .thinking }
         if model.isPaused { return .idle }
@@ -26,36 +21,43 @@ struct MissionHUDView: View {
     var body: some View {
         let cards = visibleCards
         let hasCards = !cards.isEmpty
-        // Two discrete heights (no continuous content measurement, which flapped before):
-        // compact at rest, generous 60/40 transcript-over-cards when cards are present.
-        let maxContent = max(240, model.hudMaxHeight - chrome)
-        let split = HUDLayout.split(availableHeight: Double(maxContent), hasCards: hasCards)
-        let transcriptH = hasCards ? CGFloat(split.transcript) : restingTranscript
 
-        return GlassStack(spacing: 16) {
+        // The panel is a fixed size and this fills it (maxWidth/maxHeight .infinity). The
+        // GeometryReader divides the REAL available space, so the regions always fit the
+        // panel exactly (no clipping) and nothing is sized from a fluctuating fitting
+        // size (no jumping). Transcript-over-cards is a ~60/40 split when cards are shown.
+        GlassStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
                 header
-                if showAsk {
-                    ChatView(model: model, compact: true).frame(height: maxContent)
-                } else {
-                    transcriptArea.frame(height: transcriptH)   // ~60% with cards, modest at rest
-                    if hasCards {
-                        Divider().opacity(0.25)
-                        cardsArea(cards).frame(height: CGFloat(split.cards))   // ~40%
+                GeometryReader { geo in
+                    let split = HUDLayout.split(availableHeight: Double(geo.size.height), hasCards: hasCards)
+                    if showAsk {
+                        ChatView(model: model, compact: true)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            transcriptArea.frame(height: max(0, CGFloat(split.transcript) - (hasCards ? 11 : 0)))
+                            if hasCards {
+                                Divider().opacity(0.25)
+                                cardsArea(cards).frame(height: max(0, CGFloat(split.cards)))
+                            }
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                        .animation(.easeInOut(duration: 0.28), value: hasCards)
                     }
                 }
             }
-            .padding(16)
-            .frame(width: 384)
-            .animation(.easeInOut(duration: 0.28), value: hasCards)
+            .padding(18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)   // fill the fixed panel
             // Real Liquid Glass on the functional layer: the clear variant is the most
             // text-forward, glassiest surface, and it renders its own light-aware edge
             // and adapts to what is behind it, so there is NO manual border (a drawn
-            // stroke is the hard edge glass is meant to avoid). The shadow gives depth.
+            // stroke is the hard edge glass is meant to avoid). The shadow gives depth;
+            // the outer padding leaves room for it so it is not clipped at the edge.
             .missionGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: .black.opacity(0.32), radius: 24, y: 12)
+            .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
         }
-        .padding(10)
+        .padding(22)   // more than the shadow radius, so the soft shadow is not clipped at the panel edge
     }
 
     // Pinned cards first (they never auto-dismiss), then the flowing ones. The HUD shows
