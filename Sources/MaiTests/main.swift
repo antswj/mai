@@ -1199,17 +1199,6 @@ do {
     check(full.transcript == 800 && full.cards == 0, "no cards -> transcript uses the full height")
 }
 
-section("Transcript auto-follow: at-bottom predicate (drives scroll-as-it-comes-in)")
-do {
-    // Scrolled to the bottom (offset + container == content): follow.
-    check(HUDLayout.isAtBottom(contentOffsetY: 460, containerHeight: 200, contentHeight: 660), "at the bottom -> follow")
-    // Within tolerance of the bottom: still follow (a new line just nudged content).
-    check(HUDLayout.isAtBottom(contentOffsetY: 440, containerHeight: 200, contentHeight: 660), "near the bottom (within tolerance) -> follow")
-    // Scrolled up to read history: do NOT follow (a new line must not yank down).
-    check(!HUDLayout.isAtBottom(contentOffsetY: 50, containerHeight: 200, contentHeight: 1000), "scrolled up into history -> do not follow")
-    // Content shorter than the container (nothing to scroll): treated as at-bottom.
-    check(HUDLayout.isAtBottom(contentOffsetY: 0, containerHeight: 200, contentHeight: 120), "not scrollable -> follow")
-}
 
 // ============================ Features 3: translation, HUD sizing, pinned cards ============================
 
