@@ -39,10 +39,19 @@ final class MissionHUDController {
     private let inset: CGFloat = 16
     private weak var model: AppModel?
 
+    // Fixed content width; the height is the full space down to the Dock (computed from
+    // the screen). The panel is a FIXED size so it never resizes from moment to moment
+    // (no jumping); the SwiftUI content fills it and splits the space internally.
+    private let panelWidth: CGFloat = 400
+
     init(model: AppModel) {
         self.model = model
         hosting = NSHostingView(rootView: AnyView(MissionHUDView(model: model)))
-        panel = HUDPanel(contentRect: NSRect(x: 0, y: 0, width: 384, height: 260))
+        // Fill the panel: AppKit keeps the content view sized to the panel, and the
+        // SwiftUI root uses maxWidth/maxHeight .infinity, so the content always matches
+        // the panel size exactly (no clipping, no fitting-size polling).
+        hosting.autoresizingMask = [.width, .height]
+        panel = HUDPanel(contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: 400))
         panel.contentView = hosting
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -59,39 +68,25 @@ final class MissionHUDController {
             ?? NSScreen.main ?? NSScreen.screens.first ?? NSScreen()
     }
 
-    // Re-pin to the top-right of the active screen's visibleFrame (excludes menu bar
-    // and Dock), recomputed each show so a display change is always honored. Pin math
-    // is the unit-tested HUDLayout.topRightOrigin.
-    // Idempotent: called on show, on screen change, and by the 1s tick. It only touches
-    // the panel when the target frame actually changes, so in steady state it is a true
-    // no-op. (The previous version called setFrame(animate:true) every tick, which made
-    // the panel visibly jump and kept resetting the transcript ScrollView's position.)
+    // Pin the FIXED-size panel to the top-right of the active screen's visibleFrame
+    // (excludes the menu bar and Dock). The panel is a fixed size (width = panelWidth,
+    // height = the full space down to the Dock), so this is NOT called on a timer and
+    // never resizes moment to moment: it only runs on show and on a display change, and
+    // it early-returns when the target frame is unchanged. That is what stops the
+    // jumping. The SwiftUI content fills this fixed panel and splits the space itself.
     func repin() {
         let vf = activeScreen().visibleFrame
-        // The HUD can grow from the top inset down to just above the Dock (the visible
-        // frame already excludes the Dock and menu bar). Publish this max to the view,
-        // but only when it changes, to avoid needless re-renders.
-        let maxH = CGFloat(HUDLayout.maxHeight(visibleFrameHeight: Double(vf.height), inset: Double(inset)))
-        if model?.hudMaxHeight != maxH { model?.hudMaxHeight = maxH }
-
-        let size = hosting.fittingSize
-        let w = size.width > 1 ? size.width : 384
-        let h = min(maxH, size.height > 1 ? size.height : 260)   // grow up to the max, then scroll
-        let cur = panel.frame
-        // Keep the current height if the change is sub-threshold (avoids jitter).
-        let targetH = abs(h - cur.height) < 8 ? cur.height : h
+        let h = CGFloat(HUDLayout.maxHeight(visibleFrameHeight: Double(vf.height), inset: Double(inset)))
         let origin = HUDLayout.topRightOrigin(
             visibleFrame: ScreenRect(x: vf.minX, y: vf.minY, width: vf.width, height: vf.height),
-            size: (width: Double(w), height: Double(targetH)), inset: Double(inset))
-        let target = NSRect(x: origin.x, y: origin.y, width: w, height: targetH)
-        // Steady state: if nothing meaningful changed, do not touch the panel at all
-        // (this is what stops the per-tick jumping). Only a real change (a card appearing
-        // or leaving, a display change) resizes, and that one change is animated.
+            size: (width: Double(panelWidth), height: Double(h)), inset: Double(inset))
+        let target = NSRect(x: origin.x, y: origin.y, width: panelWidth, height: h)
+        let cur = panel.frame
         if abs(target.origin.x - cur.origin.x) < 1, abs(target.origin.y - cur.origin.y) < 1,
            abs(target.size.width - cur.size.width) < 1, abs(target.size.height - cur.size.height) < 1 {
-            return
+            return   // unchanged (same screen): do nothing, so nothing jumps
         }
-        panel.setFrame(target, display: true, animate: true)
+        panel.setFrame(target, display: true, animate: false)
     }
 
     var isVisible: Bool { panel.isVisible }
