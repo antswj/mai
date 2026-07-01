@@ -11,9 +11,6 @@ import MaiCore
 struct MissionHUDView: View {
     @ObservedObject var model: AppModel
     @State private var showAsk = false
-    // The transcript sticks to the newest line only while the user is at the bottom;
-    // if they scroll up to read history, new lines do not yank them back down.
-    @State private var atBottom = true
 
     // Header + paddings, subtracted from the panel max to get the content height.
     private let chrome: CGFloat = 76
@@ -24,14 +21,6 @@ struct MissionHUDView: View {
         if model.assistantThinking { return .thinking }
         if model.isPaused { return .idle }
         return .listening
-    }
-
-    // Changes on ANY transcript update (new line, a streaming partial growing, or a
-    // partial finalizing), unlike liveLines.count which is unchanged when a partial is
-    // replaced by its final. Drives the auto-scroll.
-    private var transcriptSignature: String {
-        guard let last = model.liveLines.last else { return "0" }
-        return "\(model.liveLines.count)|\(last.id)|\(last.text.count)|\(last.translation?.count ?? 0)"
     }
 
     var body: some View {
@@ -113,40 +102,27 @@ struct MissionHUDView: View {
     }
 
     // The transcript area: the full recent history (bounded by the fixed region height,
-    // scrollable for older lines), auto-FOLLOWING the newest line so the current
-    // conversation is always visible without scrolling. Single owner of the follow: it
-    // scrolls to the newest line only while the user is already at the bottom, so
-    // scrolling up to read history is never yanked back down by a new line.
+    // scrollable for older lines). `defaultScrollAnchor(.bottom)` keeps the newest line
+    // pinned to the bottom as content grows, so it auto-follows the conversation as it
+    // comes in, including while a partial line streams (content size changes), with no
+    // manual scroll bookkeeping. The user can still scroll up to read history.
     private var transcriptArea: some View {
         let lines = model.liveLines
-        return ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if lines.isEmpty {
-                        Text(model.isPaused ? "Paused" : "Listening\u{2026}")
-                            .font(.callout).foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
-                            TranscriptLineView(line: line, active: idx == lines.count - 1, ruby: model.config.ruby)
-                                .id(line.id)
-                        }
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                if lines.isEmpty {
+                    Text(model.isPaused ? "Paused" : "Listening\u{2026}")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                        TranscriptLineView(line: line, active: idx == lines.count - 1, ruby: model.config.ruby)
+                            .id(line.id)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            // True when the scroll is at (or near) the bottom; drives whether to follow.
-            .onScrollGeometryChange(for: Bool.self) { geo in
-                HUDLayout.isAtBottom(contentOffsetY: geo.contentOffset.y, containerHeight: geo.containerSize.height, contentHeight: geo.contentSize.height)
-            } action: { _, nowAtBottom in atBottom = nowAtBottom }
-            // Follow on ANY transcript change (new line, a streaming partial growing, or a
-            // partial finalizing) rather than only on line count, but only while at the
-            // bottom so reading history is not interrupted.
-            .onChange(of: transcriptSignature) {
-                guard atBottom, let last = lines.last else { return }
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
-            }
-            .onAppear { if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .defaultScrollAnchor(.bottom)
     }
 
     // The cards area: the recent cards, newest first, scrolling within its height.

@@ -62,27 +62,36 @@ final class MissionHUDController {
     // Re-pin to the top-right of the active screen's visibleFrame (excludes menu bar
     // and Dock), recomputed each show so a display change is always honored. Pin math
     // is the unit-tested HUDLayout.topRightOrigin.
+    // Idempotent: called on show, on screen change, and by the 1s tick. It only touches
+    // the panel when the target frame actually changes, so in steady state it is a true
+    // no-op. (The previous version called setFrame(animate:true) every tick, which made
+    // the panel visibly jump and kept resetting the transcript ScrollView's position.)
     func repin() {
         let vf = activeScreen().visibleFrame
         // The HUD can grow from the top inset down to just above the Dock (the visible
-        // frame already excludes the Dock and menu bar). Publish this max to the view so
-        // it sizes its 60/40 split and scroll areas to the full available height.
-        let maxH = HUDLayout.maxHeight(visibleFrameHeight: Double(vf.height), inset: Double(inset))
-        model?.hudMaxHeight = CGFloat(maxH)
+        // frame already excludes the Dock and menu bar). Publish this max to the view,
+        // but only when it changes, to avoid needless re-renders.
+        let maxH = CGFloat(HUDLayout.maxHeight(visibleFrameHeight: Double(vf.height), inset: Double(inset)))
+        if model?.hudMaxHeight != maxH { model?.hudMaxHeight = maxH }
 
         let size = hosting.fittingSize
         let w = size.width > 1 ? size.width : 384
-        let h = min(CGFloat(maxH), size.height > 1 ? size.height : 260)   // grow up to the max, then scroll
-        // Deadband: ignore sub-threshold height jitter so content hovering around a
-        // boundary does not make the panel flap. Width and origin still track.
-        let cur = panel.frame.size
-        let newH = abs(h - cur.height) < 8 ? cur.height : h
+        let h = min(maxH, size.height > 1 ? size.height : 260)   // grow up to the max, then scroll
+        let cur = panel.frame
+        // Keep the current height if the change is sub-threshold (avoids jitter).
+        let targetH = abs(h - cur.height) < 8 ? cur.height : h
         let origin = HUDLayout.topRightOrigin(
             visibleFrame: ScreenRect(x: vf.minX, y: vf.minY, width: vf.width, height: vf.height),
-            size: (width: Double(w), height: Double(newH)), inset: Double(inset))
-        // Animate the resize so growth/contraction is smooth and quiet (top-right pinned,
-        // so the origin moves with the height).
-        panel.setFrame(NSRect(x: origin.x, y: origin.y, width: w, height: newH), display: true, animate: true)
+            size: (width: Double(w), height: Double(targetH)), inset: Double(inset))
+        let target = NSRect(x: origin.x, y: origin.y, width: w, height: targetH)
+        // Steady state: if nothing meaningful changed, do not touch the panel at all
+        // (this is what stops the per-tick jumping). Only a real change (a card appearing
+        // or leaving, a display change) resizes, and that one change is animated.
+        if abs(target.origin.x - cur.origin.x) < 1, abs(target.origin.y - cur.origin.y) < 1,
+           abs(target.size.width - cur.size.width) < 1, abs(target.size.height - cur.size.height) < 1 {
+            return
+        }
+        panel.setFrame(target, display: true, animate: true)
     }
 
     var isVisible: Bool { panel.isVisible }

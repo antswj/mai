@@ -67,16 +67,6 @@ public enum HUDLayout {
         max(120, h - inset - bottomGap)
     }
 
-    // Whether a scroll view is at (or within tolerance of) the bottom. Drives the live
-    // transcript's auto-follow: it scrolls to the newest line only while at the bottom,
-    // so scrolling up to read history is never yanked back down by a new line. Also true
-    // when the content is shorter than the container (nothing to scroll), so a short
-    // transcript still follows.
-    public static func isAtBottom(contentOffsetY: Double, containerHeight: Double,
-                                  contentHeight: Double, tolerance: Double = 40) -> Bool {
-        contentOffsetY + containerHeight >= contentHeight - tolerance
-    }
-
     // Split the available height into a transcript area (top) and a cards area (bottom):
     // about 60 percent transcript over 40 percent cards when both are shown, and the
     // transcript taking the full height when there are no cards. The Mission HUD uses
