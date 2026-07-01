@@ -23,6 +23,18 @@ extension View {
             if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
         }
     }
+
+    // The Mission mode HUD surface: the CLEAR Liquid Glass variant, the most
+    // text-forward and glassiest, so the desktop and the call behind it read through
+    // strongly. Falls back to a translucent material below macOS 26.
+    @ViewBuilder
+    func missionGlass<S: Shape>(in shape: S) -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.clear, in: shape)
+        } else {
+            self.background(.ultraThinMaterial, in: shape)
+        }
+    }
 }
 
 // Groups nearby glass shapes so they render together (glass cannot sample other
