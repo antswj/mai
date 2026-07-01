@@ -32,9 +32,7 @@ extension RealEars {
         if cfg.vadEnabled, let micVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate),
            let systemVad = SileroVAD.bundled(sampleRate: cfg.sttSampleRate) {
             setGates(mic: VadGatedSource(client: mic, vad: micVad, config: cfg, onSent: { [weak self] bytes in self?.noteSent(); self?.recordSentBytes(bytes) }),
-                     // The system gate forwarding voiced audio is the "speaker is playing"
-                     // signal that gates the mic-final echo hold.
-                     system: VadGatedSource(client: system, vad: systemVad, config: cfg, onSent: { [weak self] bytes in self?.noteSent(); self?.recordSentBytes(bytes); self?.noteSystemActive() }))
+                     system: VadGatedSource(client: system, vad: systemVad, config: cfg, onSent: { [weak self] bytes in self?.noteSent(); self?.recordSentBytes(bytes) }))
         } else {
             setGates(mic: nil, system: nil)
             mic.connect()

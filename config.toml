@@ -92,13 +92,15 @@ preroll_seconds = 1.0             # pre-onset audio kept in a ring buffer and fl
 [echo]
 # Speaker-to-mic echo suppression: when audio plays through the speakers, the mic
 # picks it up and it would be transcribed twice (once as the real speaker from system
-# audio, once wrongly as "You"). Mai drops the mic copy. While system audio is
-# playing, a mic line is held briefly so a matching system line that finalizes
-# slightly later is still caught, regardless of which stream finalizes first. Genuine
-# user speech in a quiet room is never held. Headphones remove the echo at the source.
-# Set MAI_DEBUG_ECHO=1 to log both streams and the decisions.
+# audio, once wrongly as "You"). Mai drops the mic copy. It is dropped when it matches
+# a recent system line (text) OR when the mic and speaker were loud at the same time
+# (acoustic echo, detected from raw audio energy at capture, so it works even when the
+# echo transcribes differently). Genuine speech in a quiet room overlaps nothing and
+# is kept. Headphones remove the echo at the source. Set MAI_DEBUG_ECHO=1 to log the
+# decisions. If your own speech gets dropped while media plays, raise system_active_rms;
+# if echo slips through, lower it (or set suppression = false to turn it off).
 suppression = true
-hold_seconds = 2.0                # how long a mic line is held while system audio is active
+system_active_rms = 0.015         # loudness (0..1) above which the speaker counts as playing
 
 [location]
 test_lat = 35.7016                # public Funabashi Station area, NOT a home address
