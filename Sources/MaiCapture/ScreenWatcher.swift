@@ -17,6 +17,8 @@ public final class ScreenWatcher: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let queue = DispatchQueue(label: "mai.screen.watch", qos: .utility)
     private let ciContext = CIContext(options: nil)
     private var stream: SCStream?
+    private var filterRefreshTask: Task<Void, Never>?
+    private var excludedWindowIDs: Set<CGWindowID> = []
 
     private var keyframe: UInt64 = 0
     private var pendingHash: UInt64?
@@ -30,15 +32,16 @@ public final class ScreenWatcher: NSObject, SCStreamOutput, SCStreamDelegate, @u
     }
 
     public func start() async throws {
-        let display = try await CaptureContent.firstDisplay()
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let displayFilter = try await CaptureContent.firstDisplayFilterExcludingSelf()
+        excludedWindowIDs = displayFilter.excludedWindowIDs
+        let filter = SCContentFilter(display: displayFilter.display, excludingWindows: displayFilter.excludedWindows)
 
         let cfg = SCStreamConfiguration()
         let fps = max(1, Int((1.0 / max(0.2, config.screenFrameIntervalSeconds)).rounded()))
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         cfg.pixelFormat = kCVPixelFormatType_32BGRA
-        cfg.width = max(2, display.width)
-        cfg.height = max(2, display.height)
+        cfg.width = max(2, displayFilter.display.width)
+        cfg.height = max(2, displayFilter.display.height)
         cfg.queueDepth = 5
         cfg.showsCursor = false
 
@@ -46,11 +49,15 @@ public final class ScreenWatcher: NSObject, SCStreamOutput, SCStreamDelegate, @u
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         self.stream = stream
         try await stream.startCapture()
+        filterRefreshTask = Task { [weak self] in await self?.refreshSelfWindowExclusionLoop() }
     }
 
     public func stop() {
+        filterRefreshTask?.cancel()
+        filterRefreshTask = nil
         stream?.stopCapture { _ in }
         stream = nil
+        excludedWindowIDs = []
     }
 
     // MARK: - SCStreamOutput
@@ -101,6 +108,26 @@ public final class ScreenWatcher: NSObject, SCStreamOutput, SCStreamDelegate, @u
         keyframe = hash
         pendingHash = nil
         if let jpeg = jpeg(pixelBuffer) { onSettledFrame(jpeg) }
+    }
+
+    private func refreshSelfWindowExclusionLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await refreshSelfWindowExclusion()
+        }
+    }
+
+    private func refreshSelfWindowExclusion() async {
+        guard let stream else { return }
+        guard let displayFilter = try? await CaptureContent.firstDisplayFilterExcludingSelf() else { return }
+        guard displayFilter.excludedWindowIDs != excludedWindowIDs else { return }
+        let filter = SCContentFilter(display: displayFilter.display, excludingWindows: displayFilter.excludedWindows)
+        do {
+            try await stream.updateContentFilter(filter)
+            excludedWindowIDs = displayFilter.excludedWindowIDs
+        } catch {
+            // Keep the current filter; the next refresh will try again.
+        }
     }
 
     private func dHash(_ pixelBuffer: CVPixelBuffer) -> UInt64 {

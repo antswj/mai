@@ -87,7 +87,7 @@ xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 # screen recording is TCC-only. No --deep (single binary), no JIT/library-validation
 # relaxations.
 codesign --force --options runtime --entitlements "${ROOT}/Mai.entitlements" --sign "$SIGN_ID" "$APP"
-codesign --verify --strict --verbose=2 "$APP" || true
+codesign --verify --strict --verbose=2 "$APP"
 
 SIGN_DESC="ad-hoc (grants reset on each rebuild)"
 [ "$SIGN_ID" != "-" ] && SIGN_DESC="\"$SIGN_ID\" (grants persist across rebuilds)"

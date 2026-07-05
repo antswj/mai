@@ -48,18 +48,40 @@ extension RealEyes {
       shared content). This is NOT a description; it is the lookup target.
     - "participants"/"active_speaker": only for a video call grid (visible names and the
       single highlighted active speaker); empty otherwise.
+    - Ignore Mai's own floating HUD, popup, transcript, and cards if they appear in the
+      capture. Describe the underlying app or shared screen instead. If only Mai is
+      visible, return empty "content" and "subject".
     """
 
     public static func parseScreenRead(_ text: String) -> (content: String, subject: String?, roster: [String], highlighted: String?) {
         guard let obj = firstJSONObject(text) else {
-            return (text.trimmingCharacters(in: .whitespacesAndNewlines), nil, [], nil)
+            let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return isLikelySelfOverlay(content: content, subject: nil) ? ("", nil, [], nil) : (content, nil, [], nil)
         }
-        let content = (obj["content"] as? String) ?? text
+        let content = ((obj["content"] as? String) ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = (obj["subject"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         var roster: [String] = []
         if let arr = obj["participants"] as? [Any] { roster = arr.compactMap { $0 as? String } }
         let active = (obj["active_speaker"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isLikelySelfOverlay(content: content, subject: subject) {
+            return ("", nil, roster, (active?.isEmpty == false) ? active : nil)
+        }
         return (content, (subject?.isEmpty == false) ? subject : nil, roster, (active?.isEmpty == false) ? active : nil)
+    }
+
+    private static func isLikelySelfOverlay(content: String, subject: String?) -> Bool {
+        let haystack = ([content, subject ?? ""]).joined(separator: " ").lowercased()
+        guard haystack.contains("mai") else { return false }
+
+        // Do not suppress actual engineering work about Mai's codebase.
+        let codeContext = [".swift", "swift code", "xcode", "code editor", "source file", "function", "class ", "struct "]
+        if codeContext.contains(where: { haystack.contains($0) }) { return false }
+
+        let surfaceWords = ["overlay", "floating", "popup", "pop-up", "hud", "heads-up", "panel"]
+        let ownUIWords = ["live transcript", "cards", "suggested reply", "provider health", "latency telemetry", "listening", "paused"]
+        let describesSurface = surfaceWords.contains { haystack.contains($0) }
+        let describesOwnUI = ownUIWords.contains { haystack.contains($0) }
+        return describesSurface && describesOwnUI
     }
 
     private static func firstJSONObject(_ text: String) -> [String: Any]? {

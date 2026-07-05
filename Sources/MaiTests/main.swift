@@ -383,6 +383,30 @@ do {
           "missing lists only screen recording")
 }
 
+section("Screen capture: Mai windows are excluded without hiding real apps")
+do {
+    let currentPID = pid_t(42)
+    check(CaptureSelfWindowMatcher.isSelf(ownerBundleIdentifier: "com.mai.app", ownerProcessID: 99,
+                                          currentBundleIdentifier: "com.mai.app", currentProcessID: currentPID),
+          "same bundle identifier counts as Mai")
+    check(CaptureSelfWindowMatcher.isSelf(ownerBundleIdentifier: nil, ownerProcessID: currentPID,
+                                          currentBundleIdentifier: "com.mai.app", currentProcessID: currentPID),
+          "same process id counts as Mai even without a bundle id")
+    check(!CaptureSelfWindowMatcher.isSelf(ownerBundleIdentifier: "com.apple.Safari", ownerProcessID: 99,
+                                           currentBundleIdentifier: "com.mai.app", currentProcessID: currentPID),
+          "a different app is not excluded")
+}
+
+section("Screen reads: Mai overlay is ignored, Mai source code is preserved")
+do {
+    let overlay = RealEyes.parseScreenRead(#"{"content":"A floating Mai HUD overlay shows a live transcript and Cards above the desktop.","subject":"Mai overlay","participants":[],"active_speaker":""}"#)
+    check(overlay.content.isEmpty && overlay.subject == nil, "self-overlay screen reads are dropped")
+
+    let code = RealEyes.parseScreenRead(#"{"content":"A code editor is open to HUDPanel.swift, showing Swift code for Mai's floating panel.","subject":"HUDPanel.swift","participants":[],"active_speaker":""}"#)
+    check(code.content.contains("HUDPanel.swift") && code.subject == "HUDPanel.swift",
+          "engineering screens about Mai remain readable")
+}
+
 // ============================ Step 3: card intelligence ============================
 
 final class CollectingRichSink: RichCardSink, @unchecked Sendable {

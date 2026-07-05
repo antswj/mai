@@ -35,6 +35,46 @@ extension View {
             self.background(.ultraThinMaterial, in: shape)
         }
     }
+
+    @ViewBuilder
+    func spatialPanel<S: InsettableShape>(in shape: S, shadowOpacity: Double = 0.20) -> some View {
+        self
+            .functionalGlass(in: shape)
+            .overlay {
+                if #available(macOS 26.0, *) {
+                    EmptyView()
+                } else {
+                    shape.strokeBorder(.white.opacity(0.16), lineWidth: 0.7)
+                }
+            }
+            .shadow(color: .black.opacity(shadowOpacity), radius: 18, y: 8)
+            .shadow(color: .white.opacity(0.10), radius: 1, y: -1)
+    }
+
+    func spatialContentTile<S: InsettableShape>(in shape: S, tint: Color = .secondary,
+                                                suppressed: Bool = false) -> some View {
+        self
+            .background {
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor).opacity(suppressed ? 0.20 : 0.34)
+                    tint.opacity(suppressed ? 0.04 : 0.08)
+                }
+                .clipShape(shape)
+            }
+            .overlay(shape.strokeBorder(.white.opacity(suppressed ? 0.07 : 0.13), lineWidth: 0.6))
+            .shadow(color: .black.opacity(suppressed ? 0.04 : 0.10), radius: 7, y: 3)
+    }
+
+    func visionContentBackground() -> some View {
+        self.background {
+            LinearGradient(colors: [
+                Color(nsColor: .windowBackgroundColor),
+                Color(nsColor: .controlBackgroundColor).opacity(0.52),
+                Color(nsColor: .windowBackgroundColor)
+            ], startPoint: .topLeading, endPoint: .bottomTrailing)
+            .ignoresSafeArea()
+        }
+    }
 }
 
 // Groups nearby glass shapes so they render together (glass cannot sample other
@@ -48,6 +88,24 @@ struct GlassStack<Content: View>: View {
         } else {
             content
         }
+    }
+}
+
+struct SpatialIconButtonStyle: ButtonStyle {
+    var active = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: active ? .semibold : .regular))
+            .frame(width: 26, height: 26)
+            .background {
+                Circle()
+                    .fill(active ? Color.accentColor.opacity(0.18)
+                          : Color.secondary.opacity(configuration.isPressed ? 0.16 : 0.08))
+            }
+            .overlay(Circle().strokeBorder(.white.opacity(active ? 0.24 : 0.10), lineWidth: 0.6))
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

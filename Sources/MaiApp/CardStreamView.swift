@@ -228,9 +228,13 @@ struct RichCardRow<Controls: View>: View {
             .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(10)
-        .background(card.suppressed ? Color.gray.opacity(0.08) : Color.gray.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous),
+                            tint: tierColor, suppressed: card.suppressed)
         .opacity(card.suppressed ? 0.7 : 1)
+    }
+
+    private var tierColor: Color {
+        switch card.tier { case .critical: return .red; case .medium: return .blue; case .noise: return .gray }
     }
 }
 

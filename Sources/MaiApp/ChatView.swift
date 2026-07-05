@@ -72,7 +72,8 @@ struct ChatBubble: View {
                     .font(compact ? .caption : .body)
                     .textSelection(.enabled)
                     .padding(8)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                    .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous),
+                                        tint: .secondary)
                 Spacer(minLength: 28)
             } else {
                 Spacer(minLength: 28)
@@ -80,7 +81,8 @@ struct ChatBubble: View {
                     .font(compact ? .caption : .body)
                     .textSelection(.enabled)
                     .padding(8)
-                    .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
+                    .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous),
+                                        tint: .accentColor)
             }
         }
     }

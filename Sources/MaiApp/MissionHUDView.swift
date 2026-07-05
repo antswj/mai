@@ -75,30 +75,36 @@ struct MissionHUDView: View {
             Spacer()
             // Quiet icon-only controls (each with an accessibility label) so the header
             // stays glanceable: translate, mute, ask, pause.
-            Button { model.toggleTranslation() } label: {
-                Image(systemName: model.translationOn ? "character.bubble.fill" : "character.bubble")
-                    .foregroundStyle(model.translationOn ? Color.accentColor : Color.secondary)
+            HStack(spacing: 4) {
+                Button { model.toggleTranslation() } label: {
+                    Image(systemName: model.translationOn ? "character.bubble.fill" : "character.bubble")
+                        .foregroundStyle(model.translationOn ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(SpatialIconButtonStyle(active: model.translationOn))
+                .help("Translate the transcript into \(model.config.interfaceLanguage.rawValue.uppercased())")
+                .accessibilityLabel(model.translationOn ? "Turn off translation" : "Translate transcript")
+                Button { model.toggleMute() } label: {
+                    Image(systemName: model.micMuted ? "mic.slash.fill" : "mic")
+                        .foregroundStyle(model.micMuted ? Color.red : Color.secondary)
+                }
+                .buttonStyle(SpatialIconButtonStyle(active: model.micMuted))
+                .help(model.micMuted ? "Unmute your microphone" : "Mute your microphone")
+                .accessibilityLabel(model.micMuted ? "Unmute microphone" : "Mute microphone")
+                Button { withAnimation(.easeInOut(duration: 0.2)) { showAsk.toggle() } } label: {
+                    Image(systemName: showAsk ? "xmark" : "text.bubble")
+                        .foregroundStyle(showAsk ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(SpatialIconButtonStyle(active: showAsk))
+                .accessibilityLabel(showAsk ? "Close ask" : "Ask Mai")
+                Button { model.togglePause() } label: {
+                    Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
+                        .foregroundStyle(model.isPaused ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(SpatialIconButtonStyle(active: model.isPaused))
+                .accessibilityLabel(model.isPaused ? "Resume" : "Pause")
             }
-            .buttonStyle(.plain)
-            .help("Translate the transcript into \(model.config.interfaceLanguage.rawValue.uppercased())")
-            .accessibilityLabel(model.translationOn ? "Turn off translation" : "Translate transcript")
-            Button { model.toggleMute() } label: {
-                Image(systemName: model.micMuted ? "mic.slash.fill" : "mic")
-                    .foregroundStyle(model.micMuted ? Color.red : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .help(model.micMuted ? "Unmute your microphone" : "Mute your microphone")
-            .accessibilityLabel(model.micMuted ? "Unmute microphone" : "Mute microphone")
-            Button { withAnimation(.easeInOut(duration: 0.2)) { showAsk.toggle() } } label: {
-                Image(systemName: showAsk ? "xmark" : "text.bubble")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(showAsk ? "Close ask" : "Ask Mai")
-            Button { model.togglePause() } label: {
-                Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.isPaused ? "Resume" : "Pause")
+            .padding(3)
+            .spatialPanel(in: Capsule(), shadowOpacity: 0.08)
         }
         .foregroundStyle(.secondary)
     }
@@ -192,14 +198,14 @@ struct MiniCard: View {
                         image.resizable().scaledToFill()
                             .frame(maxWidth: .infinity)
                             .frame(height: expanded ? 160 : 84)
-                            .clipped().clipShape(RoundedRectangle(cornerRadius: 10))
+                            .clipped().clipShape(RoundedRectangle(cornerRadius: 8))
                     } else {
-                        RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.12))
+                        RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
                             .frame(height: expanded ? 160 : 84)
                     }
                 }
             } else if card.isPending(.image) {
-                RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.12)).frame(height: 84)
+                RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12)).frame(height: 84)
                     .overlay(ProgressView().controlSize(.small))
             }
 
@@ -249,11 +255,9 @@ struct MiniCard: View {
         // Translucent, not opaque, so the Liquid Glass surface reads THROUGH the card
         // (present but not a solid slab), with a faint tier tint and a soft shadow for
         // depth. Content stays content; only the surface below is glass.
-        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+        .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: tint)
         // Tap the card body (not the buttons) to expand/collapse.
-        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture { onToggleExpand?() }
     }
 }

@@ -19,10 +19,27 @@ public enum CaptureError: Error, CustomStringConvertible, LocalizedError {
     public var errorDescription: String? { description }
 }
 
+public enum CaptureSelfWindowMatcher {
+    public static func isSelf(ownerBundleIdentifier: String?, ownerProcessID: pid_t,
+                              currentBundleIdentifier: String?, currentProcessID: pid_t) -> Bool {
+        if ownerProcessID == currentProcessID { return true }
+        guard let ownerBundleIdentifier, let currentBundleIdentifier else { return false }
+        return ownerBundleIdentifier == currentBundleIdentifier
+    }
+}
+
+struct CaptureDisplayFilter {
+    let display: SCDisplay
+    let excludedWindows: [SCWindow]
+    let excludedWindowIDs: Set<CGWindowID>
+}
+
 // Reliable shareable-content fetch. Uses excludingDesktopWindows (the battle-tested
 // call) rather than SCShareableContent.current, which can return empty displays on
 // current macOS, and retries because display enumeration can transiently be empty in
-// the moment after Screen Recording is granted.
+// the moment after Screen Recording is granted. The filter excludes Mai's own windows
+// so screen reads see the app underneath the floating HUD instead of reading Mai back
+// to itself.
 enum CaptureContent {
     static func firstDisplay(retries: Int = 6, delayMs: UInt64 = 300) async throws -> SCDisplay {
         for _ in 0...retries {
@@ -33,6 +50,34 @@ enum CaptureContent {
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
         }
         throw CaptureError.noDisplay
+    }
+
+    static func firstDisplayFilterExcludingSelf(retries: Int = 6, delayMs: UInt64 = 300) async throws -> CaptureDisplayFilter {
+        for _ in 0...retries {
+            if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+               let display = content.displays.first {
+                let excluded = selfWindows(in: content.windows)
+                return CaptureDisplayFilter(
+                    display: display,
+                    excludedWindows: excluded,
+                    excludedWindowIDs: Set(excluded.map(\.windowID)))
+            }
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        }
+        throw CaptureError.noDisplay
+    }
+
+    private static func selfWindows(in windows: [SCWindow]) -> [SCWindow] {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let currentBundleID = Bundle.main.bundleIdentifier
+        return windows.filter { window in
+            guard let app = window.owningApplication else { return false }
+            return CaptureSelfWindowMatcher.isSelf(
+                ownerBundleIdentifier: app.bundleIdentifier,
+                ownerProcessID: app.processID,
+                currentBundleIdentifier: currentBundleID,
+                currentProcessID: currentPID)
+        }
     }
 }
 
@@ -63,9 +108,9 @@ public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         // Microphone and Screen Recording grants are requested and verified up front
         // by CapturePermissions before this runs, so the SCStream only starts when
         // both are granted.
-        let display = try await CaptureContent.firstDisplay()
+        let displayFilter = try await CaptureContent.firstDisplayFilterExcludingSelf()
         // Audio capture requires a valid display filter even though we ignore video.
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let filter = SCContentFilter(display: displayFilter.display, excludingWindows: displayFilter.excludedWindows)
 
         let config = SCStreamConfiguration()
         config.capturesAudio = true

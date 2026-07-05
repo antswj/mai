@@ -43,6 +43,7 @@ struct FullAppView: View {
                 }
             }
             .frame(minWidth: 560, minHeight: 480)
+            .visionContentBackground()
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -100,5 +101,6 @@ struct LiveAndCardsView: View {
                 CardStreamView(model: model).frame(minWidth: 320)
             }
         }
+        .visionContentBackground()
     }
 }
