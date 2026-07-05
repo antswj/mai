@@ -56,7 +56,7 @@ struct SimulatedInputView: View {
             Spacer()
         }
         .padding(12)
-        .frame(width: 320)
+        .frame(minWidth: 280, idealWidth: 320, maxWidth: 380)
     }
 
     private func send() {

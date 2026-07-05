@@ -17,12 +17,15 @@ extension RealEyes {
     private func readSettledFrame(_ jpeg: Data) {
         guard let key = secrets.get("GEMINI_API_KEY") else { return }
         let model = config.screenModel
+        let generation = nextReadGeneration()
         Task { [weak self] in
             guard let self else { return }
             let gemini = GeminiVision(apiKey: key, model: model)
             do {
+                if let usage = self.usage { await usage.recordVision() }
                 let text = try await gemini.read(imageData: jpeg, mimeType: "image/jpeg",
                                                  prompt: Self.screenReadPrompt)
+                guard self.isCurrentReadGeneration(generation) else { return }
                 let parsed = Self.parseScreenRead(text)
                 self.updateNaming(roster: parsed.roster, highlighted: parsed.highlighted)
                 if !parsed.content.isEmpty { self.emit(content: parsed.content, subject: parsed.subject) }

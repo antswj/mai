@@ -77,6 +77,7 @@ public struct RichCard: Sendable, Identifiable, Equatable {
     public var suppressed: Bool              // surfaced vs shown only in the quiet log
     public var note: String?                 // small caption (e.g. "Suggested reply for Sato")
     public var unverified: Bool              // model fallback (no source found); shown labeled
+    public var rating: CardRating?           // resolved-card usefulness score, local and no-cost
 
     public init(
         id: String = UUID().uuidString,
@@ -98,7 +99,8 @@ public struct RichCard: Sendable, Identifiable, Equatable {
         latencyMs: Int? = nil,
         suppressed: Bool = false,
         note: String? = nil,
-        unverified: Bool = false
+        unverified: Bool = false,
+        rating: CardRating? = nil
     ) {
         self.id = id; self.trigger = trigger; self.timestamp = timestamp
         self.route = route; self.tier = tier; self.score = score
@@ -107,6 +109,7 @@ public struct RichCard: Sendable, Identifiable, Equatable {
         self.searchSuggestionHTML = searchSuggestionHTML
         self.pending = pending; self.timings = timings; self.latencyMs = latencyMs
         self.suppressed = suppressed; self.note = note; self.unverified = unverified
+        self.rating = rating
     }
 
     public var isLoading: Bool { !pending.isEmpty }

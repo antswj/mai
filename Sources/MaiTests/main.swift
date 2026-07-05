@@ -442,18 +442,44 @@ final class CompletionCounter: @unchecked Sendable {
     var value: Int { lock.withLock { n } }
 }
 
+final class CompletionLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func append(_ value: String) { lock.withLock { values.append(value) } }
+    var all: [String] { lock.withLock { values } }
+}
+
 struct RichRig { let engine: Engine; let sink: CollectingRichSink; let store: SQLiteStore }
 func makeRichRig(_ config: Config = Config(), entity: EntityLookup = StubEntityLookup(),
-                 grounded: GroundedSearch = StubGroundedSearch(), places: PlacesProvider = StubPlaces()) -> RichRig {
+                 grounded: GroundedSearch = StubGroundedSearch(), places: PlacesProvider = StubPlaces(),
+                 llm: LLMProvider = StubLLM()) -> RichRig {
     let dir = tempDir()
     let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
     let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
     let sink = CollectingRichSink()
-    let engine = Engine(config: config, llm: StubLLM(), places: places,
+    let engine = Engine(config: config, llm: llm, places: places,
                         location: FixedLocation(lat: config.testLat, lng: config.testLng),
                         store: store, verbatim: verbatim, face: ConsoleFace(),
                         richSink: sink, entity: entity, grounded: grounded)
     return RichRig(engine: engine, sink: sink, store: store)
+}
+
+func waitResolvedCards(_ sink: CollectingRichSink, minimum: Int, timeoutMs: Int = 7000) async -> [RichCard] {
+    for _ in 0..<(timeoutMs / 10) {
+        let resolved = sink.all.filter { $0.pending.isEmpty && !$0.suppressed }
+        if resolved.count >= minimum { return resolved }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return sink.all.filter { $0.pending.isEmpty && !$0.suppressed }
+}
+
+func waitForCard(_ sink: CollectingRichSink, timeoutMs: Int = 7000,
+                 matching predicate: @escaping (RichCard) -> Bool) async -> RichCard? {
+    for _ in 0..<(timeoutMs / 10) {
+        if let card = sink.all.first(where: predicate) { return card }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return sink.all.first(where: predicate)
 }
 
 section("Trivial answers: local, exact, conservative")
@@ -522,6 +548,7 @@ do {
     check(card.source != nil, "grounded source present")
     check(card.sources.count == 2, "all grounded sources retained (not just the first)")
     check(card.imageURL == nil, "grounded cards carry no image (never fabricated)")
+    check(card.rating?.useful == true, "sourced cards pass the local usefulness rating")
 }
 
 section("Enrichment: technical route tries grounded search first (model is last resort)")
@@ -578,6 +605,24 @@ do {
                                  entity: emptyEntity, grounded: emptyGrounded, llm: deadLLM)
     check(card.pending.isEmpty, "card still resolves")
     check(card.info?.lowercased().contains("could not reach") == true, "honest connectivity message, not invented facts")
+    check(card.suppressed, "a connectivity-only card is rated weak and hidden from the main stream")
+    check(card.rating?.grade == "weak", "weak card carries its usefulness rating")
+}
+
+section("Card rating: actionable place cards rate higher than weak filler")
+do {
+    let fallback = "Could not reach the answer service just now; will retry on the next mention."
+    let good = RichCard(trigger: .place, timestamp: Date(), route: .place, score: 0.86,
+                        headline: "Nearby: sushi",
+                        info: "Sushi HP\n~150 m away\nFunabashi",
+                        source: RichSource(title: "Maps", url: "https://example.com"),
+                        action: Action(kind: "open_in_maps", label: "Open in Maps", params: ["url": "https://maps.example"]))
+    let weak = RichCard(trigger: .question, timestamp: Date(), route: .technical, score: 0.60,
+                        headline: "Anything", info: fallback)
+    let goodRating = CardRating.evaluate(good)
+    let weakRating = CardRating.evaluate(weak)
+    check(goodRating.useful && goodRating.score > weakRating.score, "rating favors sourced/actionable cards")
+    check(!weakRating.useful, "connectivity fallback is below the usefulness threshold")
 }
 
 section("Async enrichment: instant skeleton, transcript never blocked")
@@ -700,6 +745,47 @@ do {
     check(completions.value == 1, "the superseded first enrichment did not complete (only the second did)")
 }
 
+section("Rich enricher: stale cleanup cannot untrack the active superseding task")
+do {
+    struct EntityRoutingLLM: LLMProvider {
+        func complete(system: String, user: String, model: String) async throws -> String {
+            guard system.contains("lookup router") else { return #"{"answer":"fallback"}"# }
+            let topic: String
+            if user.contains("\"first\"") { topic = "first" }
+            else if user.contains("\"second\"") { topic = "second" }
+            else { topic = "third" }
+            return #"{"route":"entity","entity":"\#(topic)","query":"\#(topic)","needs_search":false,"needs_image":false}"#
+        }
+    }
+    struct CancellationBlindEntity: EntityLookup {
+        func lookup(term: String, spoken: Language, interface: Language) async throws -> EntityResult? {
+            let delayMs: UInt64 = term == "first" ? 120 : (term == "second" ? 360 : 20)
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            return EntityResult(title: term, summary: term, imageURL: nil, sourceURL: "https://example.org/\(term)")
+        }
+    }
+
+    let sink = CollectingRichSink()
+    let enricher = RichCardEnricher(config: Config(), llm: EntityRoutingLLM(), entity: CancellationBlindEntity(),
+                                    grounded: StubGroundedSearch(), places: StubPlaces(),
+                                    location: FixedLocation(lat: 0, lng: 0), sink: sink)
+    let completions = CompletionLog()
+    let skel1 = RichCard(trigger: .question, timestamp: Date(), headline: "first", pending: [RichCard.Part.route.rawValue])
+    let skel2 = RichCard(trigger: .question, timestamp: Date(), headline: "second", pending: [RichCard.Part.route.rawValue])
+    let skel3 = RichCard(trigger: .question, timestamp: Date(), headline: "third", pending: [RichCard.Part.route.rawValue])
+
+    await enricher.submit(skel1, request: .knowledge(topic: "first", window: "", spoken: .en, respond: false),
+                          supersedeKey: "same") { completions.append($0.headline) }
+    await enricher.submit(skel2, request: .knowledge(topic: "second", window: "", spoken: .en, respond: false),
+                          supersedeKey: "same") { completions.append($0.headline) }
+    try? await Task.sleep(nanoseconds: 180_000_000)
+    await enricher.submit(skel3, request: .knowledge(topic: "third", window: "", spoken: .en, respond: false),
+                          supersedeKey: "same") { completions.append($0.headline) }
+    try? await Task.sleep(nanoseconds: 450_000_000)
+
+    check(completions.all == ["third"], "only the newest enrichment completes after stale cleanup races")
+}
+
 section("Reply lock: a reference cue surfaces a reply only when the toggle is on")
 do {
     // Toggle OFF: a reference cue is reply-only, so nothing surfaces for it.
@@ -720,6 +806,103 @@ do {
     let infoCard = await waitResolved(rigInfo.sink)
     check(infoCard?.info?.isEmpty == false, "info cards still appear when replies are off")
     check(infoCard?.response == nil, "no suggested reply on an info card when replies are off")
+}
+
+section("Latency cap: slow model-only classification is cut off before the card loop stalls")
+do {
+    struct SlowClassifierOnlyLLM: LLMProvider {
+        let delayMs: UInt64
+        func complete(system: String, user: String, model: String) async throws -> String {
+            if system.contains("trigger classifier") {
+                try await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                return #"{"triggers":[{"type":"intent","span":"rollout risk","reason":"slow classifier","confidence":0.8,"payload":{"query":"rollout risk"}}]}"#
+            }
+            return try await StubLLM().complete(system: system, user: user, model: model)
+        }
+    }
+
+    let rig = makeRichRig(Config(hardCapSeconds: 0.25, onlineCapSeconds: 5),
+                          llm: SlowClassifierOnlyLLM(delayMs: 1200))
+    let start = Date()
+    await rig.engine.process(tline("The rollout risk feels material, but this phrasing is deliberately outside the local fast path.", "Mia"))
+    let elapsed = Date().timeIntervalSince(start)
+    check(elapsed < 0.9, "classifier timeout follows the hard cap instead of waiting on a slow model")
+    check(rig.sink.all.filter { !$0.suppressed }.isEmpty, "a late model-only trigger is dropped rather than surfacing stale")
+}
+
+section("Hell scenario: noisy multilingual meeting stays fast, useful, and proactive")
+do {
+    struct HellGroundedSearch: GroundedSearch {
+        func answer(query: String, interface: Language) async throws -> GroundedResult {
+            if query.localizedCaseInsensitiveContains("salesforce") {
+                try await Task.sleep(nanoseconds: 3_250_000_000)
+                return GroundedResult(
+                    answer: "For Salesforce Platform Events, track replay IDs, make Queueable retries idempotent, and route exhausted retries to a dead-letter path with alerts.",
+                    sources: [RichSource(title: "Salesforce Engineering Guide", url: "https://developer.salesforce.com/docs/platform/events")],
+                    searchSuggestionHTML: nil)
+            }
+            return GroundedResult(
+                answer: "Current sourced answer for \(query): summarize the decision, give the user the next useful fact, and cite where it came from.",
+                sources: [RichSource(title: "Current Source", url: "https://example.com/current-source")],
+                searchSuggestionHTML: "<div>search</div>")
+        }
+    }
+
+    let places = StubPlaces(results: [
+        Place(name: "Sushi Pressure Test", source: "google", rating: 4.8, reviewCount: 420,
+              address: "Near the station", lat: 35.70, lng: 139.98,
+              url: "https://maps.example/sushi-pressure-test", distanceMeters: 96)
+    ])
+    let config = Config(hardCapSeconds: 3, responseEnabled: true, onlineCapSeconds: 5)
+    let rig = makeRichRig(config, grounded: HellGroundedSearch(), places: places)
+
+    // Long, low-value chatter should not make cards or bloat the context into slow
+    // prompts. This simulates a real meeting's connective tissue.
+    for i in 0..<80 {
+        let text = i.isMultiple(of: 2) ? "okay" : "ありがとうございます"
+        await rig.engine.process(tline(text, "Noise"))
+    }
+    check(rig.sink.all.filter { !$0.suppressed }.isEmpty, "low-information chatter stays quiet even under long context")
+
+    // Technical screen content may take longer to resolve, but the skeleton still has
+    // to first-paint immediately so the user knows Mai understood the screen.
+    await rig.engine.process(sscreenSubject(
+        "Salesforce engineering screen: Apex Queueable retries, Platform Events replay IDs, dead-letter handling, and backpressure graphs.",
+        "Salesforce Platform Events replay ID recovery"))
+    let techSkeleton = await waitForCard(rig.sink, timeoutMs: 500,
+                                         matching: { $0.headline.localizedCaseInsensitiveContains("Salesforce") && !$0.pending.isEmpty })
+    check((techSkeleton?.latencyMs ?? 99999) <= 3000, "technical screen card skeleton first-paints within 3s")
+
+    await rig.engine.process(tline("what's 15% of 80", "Mia"))
+    await rig.engine.process(tline("ngl ちょっとお寿司食べたい", "Lee"))
+    await rig.engine.process(tline("what is the latest iPhone price today", "Mia"))
+    await rig.engine.process(tlineLang("それでは、ご意見をお願いできますか？", "ja", "Sato"))
+    await rig.engine.process(sscreenSubject("Presentation slide about Malaysia market expansion.", "Malaysia"))
+
+    let cards = await waitResolvedCards(rig.sink, minimum: 6, timeoutMs: 9000)
+    check(cards.count >= 6, "all six expected stress cards resolve")
+    check(cards.contains { $0.route == .technical && $0.headline.localizedCaseInsensitiveContains("Salesforce") },
+          "technical screen content resolves as a sourced technical card")
+    check(cards.contains { $0.route == .trivial && $0.info == "12" },
+          "trivial math answers locally")
+    check(cards.contains { $0.route == .place && $0.action?.kind == "open_in_maps" },
+          "place card is actionable")
+    check(cards.contains { $0.route == .fresh && !$0.sources.isEmpty },
+          "fresh/current question is grounded with sources")
+    check(cards.contains { $0.route == .preparedReply && $0.response?.language == .ja },
+          "Japanese reply cue gets a Japanese suggested reply")
+    check(cards.contains { $0.route == .entity && $0.source?.url.contains("wikipedia.org") == true },
+          "proactive screen subject becomes a sourced entity card")
+
+    let normalCards = cards.filter { !$0.headline.localizedCaseInsensitiveContains("Salesforce") }
+    check(normalCards.allSatisfy { ($0.latencyMs ?? 99999) <= 3000 },
+          "every normal stress card first-paints within the 3s ceiling")
+    check(cards.allSatisfy { $0.rating?.useful == true },
+          "every stress card passes the local usefulness gate")
+    check(normalCards.allSatisfy { ($0.rating?.score ?? 0) >= 0.70 },
+          "normal stress cards rate good-or-better quality")
+    check(cards.allSatisfy { !($0.info ?? "").localizedCaseInsensitiveContains("could not reach") },
+          "no stress card is a connectivity/filler fallback")
 }
 
 section("Script detection: furigana/pinyin work even when the language is untagged")

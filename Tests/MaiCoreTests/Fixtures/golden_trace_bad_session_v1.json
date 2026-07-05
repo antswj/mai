@@ -1,0 +1,74 @@
+{
+  "events" : [
+    {
+      "kind" : "transcript",
+      "language" : "en",
+      "offsetMs" : 0,
+      "speaker" : "Speaker 1",
+      "text" : "okay"
+    },
+    {
+      "kind" : "screen",
+      "offsetMs" : 1000,
+      "subject" : "Salesforce Platform Events replay ID recovery",
+      "text" : "Synthetic Salesforce engineering screen with retries, replay IDs, dead-letter handling, and backpressure."
+    },
+    {
+      "kind" : "transcript",
+      "language" : "en",
+      "offsetMs" : 2000,
+      "speaker" : "Speaker 2",
+      "text" : "what's 15% of 80"
+    },
+    {
+      "kind" : "transcript",
+      "language" : "ja",
+      "offsetMs" : 3000,
+      "speaker" : "Speaker 3",
+      "text" : "ngl ちょっとお寿司食べたい"
+    },
+    {
+      "kind" : "transcript",
+      "language" : "en",
+      "offsetMs" : 4000,
+      "speaker" : "Speaker 4",
+      "text" : "what is the latest iPhone price today"
+    },
+    {
+      "kind" : "transcript",
+      "language" : "ja",
+      "offsetMs" : 5000,
+      "speaker" : "Speaker 5",
+      "text" : "それでは、ご意見をお願いできますか？"
+    },
+    {
+      "kind" : "screen",
+      "offsetMs" : 6000,
+      "subject" : "Malaysia",
+      "text" : "Synthetic Malaysia market expansion slide."
+    },
+    {
+      "kind" : "transcript",
+      "language" : "en",
+      "offsetMs" : 7000,
+      "speaker" : "Speaker 6",
+      "text" : "how should we handle Salesforce Platform Events retry failures?"
+    },
+    {
+      "kind" : "transcript",
+      "language" : "zh",
+      "offsetMs" : 8000,
+      "speaker" : "Speaker 7",
+      "text" : "你怎么看"
+    },
+    {
+      "kind" : "transcript",
+      "language" : "en",
+      "offsetMs" : 9000,
+      "speaker" : "Speaker 4",
+      "text" : "what is the latest iPhone price today"
+    }
+  ],
+  "startedAt" : "2026-07-05T00:00:00Z",
+  "version" : 1
+}

@@ -34,10 +34,46 @@ public struct RollingContext: Sendable {
 
     /// The window rendered as labeled lines, oldest first, for the classifier.
     public func window() -> String {
+        renderedTurns().joined(separator: "\n")
+    }
+
+    public func window(maxChars: Int) -> String {
+        let rendered = renderedTurns()
+        let full = rendered.joined(separator: "\n")
+        guard maxChars > 0 else { return "" }
+        guard full.count > maxChars else { return full }
+        let widestPrefix = Self.omissionPrefix(dropped: rendered.count)
+        let lineBudget = max(0, maxChars - widestPrefix.count - 1)
+        guard lineBudget > 0 else { return String(widestPrefix.prefix(maxChars)) }
+
+        var kept: [String] = []
+        var used = 0
+        for line in rendered.reversed() {
+            let extra = line.count + (kept.isEmpty ? 0 : 1)
+            if used + extra <= lineBudget {
+                kept.insert(line, at: 0)
+                used += extra
+            } else if kept.isEmpty {
+                kept = [String(line.suffix(lineBudget))]
+                break
+            } else {
+                break
+            }
+        }
+        let dropped = max(0, rendered.count - kept.count)
+        let prefixed = ([Self.omissionPrefix(dropped: dropped)] + kept).joined(separator: "\n")
+        return prefixed.count <= maxChars ? prefixed : String(prefixed.prefix(maxChars))
+    }
+
+    private func renderedTurns() -> [String] {
         turns.map { t in
             let who = t.speaker?.isEmpty == false ? t.speaker! : "Speaker"
             return "\(who): \(t.text)"
-        }.joined(separator: "\n")
+        }
+    }
+
+    private static func omissionPrefix(dropped: Int) -> String {
+        "[\(dropped) earlier lines omitted to fit context]"
     }
 
     public var latest: Turn? { turns.last }

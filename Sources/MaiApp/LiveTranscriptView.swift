@@ -14,6 +14,7 @@ struct LiveTranscriptView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Live transcript").font(.headline)
+                Text(model.sessionLabel).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Toggle("Translate", isOn: Binding(get: { model.translationOn },
                                                   set: { _ in model.toggleTranslation() }))

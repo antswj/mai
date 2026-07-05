@@ -1,5 +1,7 @@
 import Foundation
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import MaiCore
 import MaiCapture
 
@@ -54,6 +56,9 @@ final class AppModel: ObservableObject {
     @Published var expandedCardIds: Set<String> = []    // HUD cards expanded to full detail
     @Published var status: String = ""
     @Published var headphonesTip = false                // one-time tip: headphones remove echo
+    @Published private(set) var sessionActive = false
+    @Published private(set) var sessionStartedAt: Date?
+    @Published private(set) var sessionEndedAt: Date?
 
     // Step 3: chat assistant, notes pipeline, modes, spend, onboarding and keys.
     @Published var chat: [ChatMessage] = []
@@ -69,26 +74,33 @@ final class AppModel: ObservableObject {
     @Published var notesFolder: URL?
     @Published var onboardingComplete: Bool
     @Published var keyPresence: [String: Bool] = [:]   // which known keys are set
+    @Published var providerHealth: [ProviderHealthResult] = []
+    @Published var providerHealthRunning = false
+    @Published var cardFeedback: [String: CardFeedbackKind] = [:]
+    @Published private(set) var feedbackSummary = CardFeedbackSummary()
+    @Published private(set) var traceEventCount = 0
+    @Published private(set) var traceReplayRunning = false
     private(set) var summonedAt = Date.distantPast
     // Last time anything happened (a partial line, a final line, or a card). Drives the
     // HUD idle timer so it rides through the natural pauses of a conversation.
     private(set) var lastActivityAt = Date()
 
     let rates = UsageRates()
-    private var assistant: AssistantProvider!
-    private var notes: NotesStore!
-    private var usage: UsageMeter!
+    private var assistant: AssistantProvider
+    private let notes: NotesStore
+    private let usage: UsageMeter
     // The live-transcript translation provider (Soniox same-stream now; swappable).
-    private(set) lazy var translation: TranslationProvider =
-        TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
+    private(set) var translation: TranslationProvider
 
     private(set) var config: Config
     private let secrets: Secrets
     private let store: MemoryStore
     private let verbatim: VerbatimLog
     private let bundled: Bool
+    private let dataDir: String
+    private let feedbackStore: CardFeedbackStore
 
-    private var engine: Engine!
+    private var engine: Engine?
     private var realEars: RealEars?
     private var realEyes: RealEyes?
     private var simEars: SimulatedEars?
@@ -98,7 +110,9 @@ final class AppModel: ObservableObject {
     private var richTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var captureRetryTask: Task<Void, Never>?
+    private var traceReplayTask: Task<Void, Never>?
     private var lastRestartAt = Date.distantPast
+    private var traceEvents: [MaiTraceEvent] = []
 
     let fixtures = ["meeting_ja_en.txt", "meeting_zh.txt", "casual.txt"]
 
@@ -112,8 +126,10 @@ final class AppModel: ObservableObject {
         let bundled = Bundle.main.bundleIdentifier != nil
         self.bundled = bundled
         let dataDir = Self.dataDirectory(bundled: bundled)
+        self.dataDir = dataDir
         self.store = (try? SQLiteStore(path: dataDir + "/mai.sqlite")) ?? StubStore()
         self.verbatim = VerbatimLog(directory: dataDir)
+        self.feedbackStore = CardFeedbackStore(url: URL(fileURLWithPath: dataDir + "/mai-card-feedback.json"))
         self.showSuppressed = config.showSuppressedLog
         self.responseEnabled = config.responseEnabled
         self.translationOn = config.sttTranslation
@@ -129,17 +145,28 @@ final class AppModel: ObservableObject {
         let baseLLM = MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: meter)
         self.notes = NotesStore(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
         self.assistant = AnthropicAssistant(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
+        self.translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
 
         self.notesFolder = Self.resolveNotesFolder()
         refreshKeyPresence()
-        startSession()
+        startSession(resetLogicalSession: true)
         refreshSavedMeetings()
         Task { await refreshSpend() }
+        Task {
+            let summary = await feedbackStore.summary()
+            await MainActor.run { self.feedbackSummary = summary }
+        }
     }
 
     // MARK: - Session lifecycle
 
-    private func startSession() {
+    private func startSession(forcePaused: Bool? = nil, resetLogicalSession: Bool = false) {
+        if resetLogicalSession || sessionStartedAt == nil {
+            beginLogicalSession(now: Date())
+        } else {
+            sessionActive = true
+            sessionEndedAt = nil
+        }
         let (faceStream, cont) = AsyncStream<FaceEvent>.makeStream()
         let face = StreamFace(cont)
         let (richStream, richCont) = AsyncStream<RichCard>.makeStream()
@@ -148,11 +175,14 @@ final class AppModel: ObservableObject {
         let places = MaiFactory.makePlaces(config: config, secrets: secrets)
         let location = MaiFactory.makeLocation(config: config)
         let entity = MaiFactory.makeEntityLookup(config: config, secrets: secrets)
-        let grounded = MeteredGrounded(MaiFactory.makeGroundedSearch(config: config, secrets: secrets), meter: usage)
+        let grounded = CachedGroundedSearch(
+            base: MeteredGrounded(MaiFactory.makeGroundedSearchBase(config: config, secrets: secrets), meter: usage)
+        )
         let engine = Engine(config: config, llm: llm, places: places, location: location,
                             store: store, verbatim: verbatim, face: face,
                             richSink: richSink, entity: entity, grounded: grounded)
         self.engine = engine
+        if chatOpen { Task { await engine.setChatOpen(true) } }
 
         // The rich-card path (Step 3) drives the card UI. The Card/Face stream is kept
         // for any non-rich fallback but is unused while lookup is enabled.
@@ -166,15 +196,18 @@ final class AppModel: ObservableObject {
             for await _ in faceStream { _ = self }   // drained; rich path is the UI
         }
 
+        let shouldStartPaused = forcePaused ?? config.startPaused
         if useSimulated {
             let ears = SimulatedEars()
             let eyes = SimulatedEyes()
             simEars = ears; simEyes = eyes; realEars = nil; realEyes = nil
-            runTask = Task { await engine.run(mergedStream(ears: ears, eyes: eyes)) }
-            captureState = config.startPaused ? .paused : .simulated
-            status = bundled
-                ? "Simulated input (debug toggle). LLM: \(config.llmProvider). Floor: \(config.floorLanguage.rawValue)."
-                : "Running unbundled: simulated input. Build Mai.app (./make-app.sh) for real capture."
+            runTask = Task { await engine.run(recordingMergedStream(ears: ears, eyes: eyes)) }
+            captureState = shouldStartPaused ? .paused : .simulated
+            status = shouldStartPaused
+                ? "Paused. Nothing is captured, transcribed, read, or stored."
+                : (bundled
+                   ? "Simulated input (debug toggle). LLM: \(config.llmProvider). Floor: \(config.floorLanguage.rawValue)."
+                   : "Running unbundled: simulated input. Build Mai.app (./make-app.sh) for real capture.")
         } else {
             let ears = RealEars(config: config, secrets: secrets)
             let eyes = RealEyes(config: config, secrets: secrets)
@@ -185,26 +218,258 @@ final class AppModel: ObservableObject {
             ears.onClearPartial = { [weak self] source in Task { @MainActor in self?.clearPartial(source) } }
             // Let the eyes feed the active-speaker name into the ears' naming layer.
             ears.highlightProvider = { [weak eyes] in eyes?.currentHighlightedName }
-            runTask = Task { await engine.run(mergedStream(ears: ears, eyes: eyes)) }
+            runTask = Task { await engine.run(recordingMergedStream(ears: ears, eyes: eyes)) }
             captureState = .starting
             status = "Starting capture. LLM: \(config.llmProvider). Floor: \(config.floorLanguage.rawValue)."
-            if !config.startPaused { Task { await startCapture() } } else { captureState = .paused }
+            if !shouldStartPaused {
+                Task { await startCapture() }
+            } else {
+                captureState = .paused
+                status = "Paused. Nothing is captured, transcribed, read, or stored."
+            }
         }
     }
 
+    private func beginLogicalSession(now: Date) {
+        sessionActive = true
+        sessionStartedAt = now
+        sessionEndedAt = nil
+        lastActivityAt = now
+    }
+
     private func stopSession() {
+        let oldEngine = engine
+        engine = nil
         runTask?.cancel(); runTask = nil
         faceTask?.cancel(); faceTask = nil
         richTask?.cancel(); richTask = nil
         watchdogTask?.cancel(); watchdogTask = nil
         captureRetryTask?.cancel(); captureRetryTask = nil
+        traceReplayTask?.cancel(); traceReplayTask = nil
+        traceReplayRunning = false
         realEars?.stop(); realEyes?.stop()
         simEars?.finish(); simEyes?.finish()
+        if let oldEngine { Task { await oldEngine.endSession() } }
+    }
+
+    private func recordingMergedStream(ears: Ears, eyes: Eyes) -> AsyncStream<EngineInput> {
+        AsyncStream { continuation in
+            let task = Task { [weak self] in
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        for await event in ears.stream() {
+                            let input = EngineInput.transcript(event)
+                            await self?.recordTrace(input)
+                            continuation.yield(input)
+                        }
+                    }
+                    group.addTask {
+                        for await event in eyes.stream() {
+                            let input = EngineInput.screen(event)
+                            await self?.recordTrace(input)
+                            continuation.yield(input)
+                        }
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func recordTrace(_ input: EngineInput) {
+        let start = sessionStartedAt ?? Date()
+        switch input {
+        case .transcript(let event):
+            guard let trace = TraceAnonymizer.transcript(event, sessionStartedAt: start) else { return }
+            traceEvents.append(trace)
+        case .screen(let event):
+            traceEvents.append(TraceAnonymizer.screen(event, sessionStartedAt: start))
+        }
+        if traceEvents.count > 20_000 { traceEvents.removeFirst(traceEvents.count - 20_000) }
+        traceEventCount = traceEvents.count
+    }
+
+    func exportAnonymizedTrace() {
+        let trace = MaiTrace(startedAt: sessionStartedAt ?? Date(), events: traceEvents)
+        let stamp = Self.fileStamp.string(from: Date())
+        let url = URL(fileURLWithPath: dataDir).appendingPathComponent("mai-trace-\(stamp).json")
+        do {
+            try trace.encodePretty().write(to: url, options: .atomic)
+            status = "Saved anonymized trace: \(url.lastPathComponent)"
+        } catch {
+            status = "Could not save anonymized trace: \(error.localizedDescription)"
+        }
+    }
+
+    func replayTracePicker() {
+        let panel = NSOpenPanel()
+        panel.title = "Replay Anonymized Mai Trace"
+        panel.prompt = "Replay"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.json]
+        if FileManager.default.fileExists(atPath: dataDir) {
+            panel.directoryURL = URL(fileURLWithPath: dataDir, isDirectory: true)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            let trace = try JSONDecoder.mai.decode(MaiTrace.self, from: data)
+            replayTrace(trace, name: url.lastPathComponent)
+        } catch {
+            status = "Could not load trace: \(error.localizedDescription)"
+        }
+    }
+
+    func replayTrace(_ trace: MaiTrace, name: String = "trace") {
+        guard !traceReplayRunning else { return }
+        let keepSimulated = useSimulated
+        if noteTaking { stopNoteTaking() }
+        stopSession()
+        resetVisibleSessionState(now: trace.startedAt)
+        useSimulated = true
+        startSession(forcePaused: false, resetLogicalSession: true)
+        sessionStartedAt = trace.startedAt
+        traceEvents = trace.events
+        traceEventCount = trace.events.count
+        traceReplayRunning = true
+        status = "Replaying \(name)..."
+
+        let replayEngine = engine
+        traceReplayTask = Task { [weak self] in
+            for event in trace.events {
+                if Task.isCancelled { break }
+                let input = trace.input(for: event)
+                await replayEngine?.process(input)
+                await MainActor.run { self?.reflectReplayInput(input) }
+                try? await Task.sleep(nanoseconds: 15_000_000)
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.traceReplayRunning = false
+                self.traceReplayTask = nil
+                self.useSimulated = keepSimulated || self.useSimulated
+                self.status = "Replayed \(name) (\(trace.events.count) events)."
+            }
+        }
+    }
+
+    private func reflectReplayInput(_ input: EngineInput) {
+        lastActivityAt = Date()
+        switch input {
+        case .transcript(let event):
+            let line = LiveTranscriptLine(id: UUID().uuidString,
+                                          speaker: event.speaker ?? "Trace",
+                                          source: .remote,
+                                          text: event.text,
+                                          language: event.language.flatMap(Language.init(rawValue:)),
+                                          isFinal: true)
+            liveLines.append(line)
+            if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
+        case .screen(let event):
+            status = "Trace screen: \(event.subject ?? "screen")"
+        }
+    }
+
+    private func refreshDependentProviders() {
+        let baseLLM = MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: usage)
+        assistant = AnthropicAssistant(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
+        let notes = notes
+        let model = config.drafterModel
+        let interface = config.interfaceLanguage
+        Task { await notes.update(llm: baseLLM, model: model, interface: interface) }
+    }
+
+    private func rebuildSessionPreservingPause() {
+        let keepSimulated = useSimulated
+        let keepPaused = isPaused
+        let keepActive = sessionActive
+        stopSession()
+        useSimulated = keepSimulated
+        if keepActive {
+            startSession(forcePaused: keepPaused ? true : nil)
+        } else {
+            captureState = .paused
+            status = "Session stopped. Start a new session when you're ready."
+        }
+    }
+
+    private func resetVisibleSessionState(now: Date = Date()) {
+        liveLines.removeAll()
+        richItems.removeAll()
+        pinnedCards.removeAll()
+        notedCardIds.removeAll()
+        notedCardLines.removeAll()
+        expandedCardIds.removeAll()
+        carouselIndex = 0
+        chat.removeAll()
+        assistantThinking = false
+        traceEvents.removeAll()
+        traceEventCount = 0
+        lastActivityAt = now
+    }
+
+    var hasSessionContent: Bool {
+        !liveLines.isEmpty || richItems.contains { !$0.suppressed } || !pinnedCards.isEmpty
+    }
+
+    var sessionLabel: String {
+        guard sessionActive else { return "Session stopped" }
+        guard let sessionStartedAt else { return "Session active" }
+        return "Session since \(Self.sessionTimeFormatter.string(from: sessionStartedAt))"
+    }
+
+    func stopCurrentSession() {
+        guard sessionActive else { return }
+        if noteTaking { stopNoteTaking() }
+        stopSession()
+        sessionActive = false
+        sessionEndedAt = Date()
+        captureState = .paused
+        status = "Session stopped. Start a new session when you're ready."
+    }
+
+    func startNewSession() {
+        let keepSimulated = useSimulated
+        if noteTaking { stopNoteTaking() }
+        stopSession()
+        resetVisibleSessionState()
+        useSimulated = keepSimulated
+        startSession(forcePaused: false, resetLogicalSession: true)
+        status = "Started a new session."
+    }
+
+    func autoSessionTick(now: Date = Date()) {
+        guard !isPaused else { return }
+        let decision = SessionAutomation.decision(
+            enabled: config.sessionAutoRollover,
+            sessionActive: sessionActive,
+            hasContent: hasSessionContent,
+            now: now,
+            startedAt: sessionStartedAt,
+            lastActivityAt: lastActivityAt,
+            idleRolloverSeconds: config.sessionIdleRolloverSeconds,
+            maxSessionSeconds: config.sessionMaxSeconds)
+        guard case .rotate(let reason) = decision else { return }
+        rotateSessionAutomatically(reason: reason, now: now)
+    }
+
+    private func rotateSessionAutomatically(reason: String, now: Date) {
+        guard sessionActive else { return }
+        let keepSimulated = useSimulated
+        if noteTaking { stopNoteTaking() }
+        stopSession()
+        resetVisibleSessionState(now: now)
+        useSimulated = keepSimulated
+        startSession(forcePaused: false, resetLogicalSession: true)
+        status = "Started a new session automatically: \(reason)."
     }
 
     // Upsert a rich card by id: first emit inserts the skeleton (newest first), later
     // emits update it in place as enrichment parts resolve.
     private func upsertRich(_ card: RichCard) {
+        let card = applyingFeedbackThreshold(to: card)
         lastActivityAt = Date()   // a surfacing card counts as activity
         if let idx = richItems.firstIndex(where: { $0.id == card.id }) {
             richItems[idx] = card
@@ -216,6 +481,39 @@ final class AppModel: ObservableObject {
         if let pidx = pinnedCards.firstIndex(where: { $0.id == card.id }) { pinnedCards[pidx] = card }
     }
 
+    private func applyingFeedbackThreshold(to incoming: RichCard) -> RichCard {
+        guard incoming.pending.isEmpty, let rating = incoming.rating else { return incoming }
+        var card = incoming
+        let threshold = feedbackSummary.adjustedUsefulThreshold(for: card.route)
+        let feedbackNote = "below feedback threshold"
+        if rating.score < threshold, !card.suppressed {
+            card.suppressed = true
+            card.tier = .noise
+            card.note = "\(feedbackNote): \(String(format: "%.2f", rating.score)) < \(String(format: "%.2f", threshold))"
+        } else if card.note?.hasPrefix(feedbackNote) == true, rating.score >= threshold {
+            card.suppressed = false
+            card.note = nil
+        }
+        return card
+    }
+
+    func recordFeedback(_ card: RichCard, _ feedback: CardFeedbackKind) {
+        cardFeedback[card.id] = feedback
+        let entry = CardFeedbackEntry(card: card, feedback: feedback)
+        Task {
+            await feedbackStore.record(entry)
+            let summary = await feedbackStore.summary()
+            await MainActor.run {
+                self.feedbackSummary = summary
+                self.richItems = self.richItems.map { self.applyingFeedbackThreshold(to: $0) }
+                self.pinnedCards = self.pinnedCards.map { self.applyingFeedbackThreshold(to: $0) }
+                self.status = "Feedback saved. \(card.route.rawValue) threshold now \(String(format: "%.2f", summary.adjustedUsefulThreshold(for: card.route)))."
+            }
+        }
+    }
+
+    func feedbackFor(_ cardId: String) -> CardFeedbackKind? { cardFeedback[cardId] }
+
     // MARK: - Pinned cards (Part 3)
 
     // Flowing cards = the stream minus the pinned ones (pinned moved into the carousel).
@@ -224,6 +522,11 @@ final class AppModel: ObservableObject {
         let items = showSuppressed ? richItems : richItems.filter { !$0.suppressed }
         return items.filter { !pinned.contains($0.id) }
     }
+
+    var telemetryCards: [CardTelemetry] { richItems.map(\.telemetry) }
+    var latencyPercentiles: [LatencyPercentileRow] { LatencyTelemetryStats.percentileRows(from: telemetryCards) }
+    var feedbackUsefulThreshold: Double { feedbackSummary.adjustedUsefulThreshold() }
+    var feedbackRouteThresholds: [RouteFeedbackThreshold] { feedbackSummary.routeThresholds() }
 
     func isPinned(_ id: String) -> Bool { pinnedCards.contains { $0.id == id } }
 
@@ -259,10 +562,7 @@ final class AppModel: ObservableObject {
     func toggleResponse() {
         responseEnabled.toggle()
         config.responseEnabled = responseEnabled
-        let keepSimulated = useSimulated
-        stopSession()
-        useSimulated = keepSimulated
-        startSession()
+        rebuildSessionPreservingPause()
         status = responseEnabled ? "Suggested responses on." : "Suggested responses off."
     }
 
@@ -273,11 +573,17 @@ final class AppModel: ObservableObject {
     func toggleTranslation() {
         translationOn.toggle()
         config.sttTranslation = translationOn
-        let keepSimulated = useSimulated
-        stopSession()
-        useSimulated = keepSimulated
-        startSession()
+        translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
+        rebuildSessionPreservingPause()
         status = translationOn ? "Translation on (\(config.interfaceLanguage.rawValue))." : "Translation off."
+    }
+
+    func setShowSuppressed(_ show: Bool) {
+        guard showSuppressed != show else { return }
+        showSuppressed = show
+        config.showSuppressedLog = show
+        rebuildSessionPreservingPause()
+        status = show ? "Suppressed card log on." : "Suppressed card log off."
     }
 
     // Apply a settings change to the config and rebuild the session so it takes effect.
@@ -285,10 +591,10 @@ final class AppModel: ObservableObject {
     func updateConfig(_ mutate: (inout Config) -> Void) {
         var c = config; mutate(&c); config = c
         responseEnabled = c.responseEnabled
-        let keepSimulated = useSimulated
-        stopSession()
-        useSimulated = keepSimulated
-        startSession()
+        showSuppressed = c.showSuppressedLog
+        translation = TranslationFactory.make(engine: c.translationEngine, target: c.interfaceLanguage)
+        refreshDependentProviders()
+        rebuildSessionPreservingPause()
     }
 
     func setLaunchAtLogin(_ on: Bool) {
@@ -312,6 +618,7 @@ final class AppModel: ObservableObject {
         // here (not buried in the audio stream) is what makes the system prompt fire
         // and lists Mai under Privacy, Microphone.
         let perms = await CapturePermissions.ensure()
+        guard captureIsCurrent(ears: ears, eyes: eyes), !isPaused else { return }
         guard perms.bothGranted else {
             FileHandle.standardError.write(Data("Mai: capture blocked, missing permission(s): \(perms.missing.joined(separator: ", "))\n".utf8))
             fallBackToSimulated(reason: Self.permissionMessage(perms))
@@ -319,19 +626,35 @@ final class AppModel: ObservableObject {
         }
         do {
             try await eyes.start()
+            guard captureIsCurrent(ears: ears, eyes: eyes), !isPaused else {
+                eyes.stop()
+                return
+            }
             try await ears.start()
+            guard captureIsCurrent(ears: ears, eyes: eyes), !isPaused else {
+                ears.stop()
+                eyes.stop()
+                return
+            }
             ears.resetHealth()
             captureState = .capturing
             status = "Capturing. Speak near the mic; advance a slide to test the screen."
             startWatchdog()
             maybeShowHeadphonesTip()
         } catch {
+            guard captureIsCurrent(ears: ears, eyes: eyes), !isPaused else { return }
+            ears.stop()
+            eyes.stop()
             // Permissions were already granted (gated above), so this is a transient
             // capture error: retry automatically rather than dropping to simulated.
             captureState = .starting
             status = "Capture error: \(error.localizedDescription). Retrying automatically..."
             scheduleCaptureRetry()
         }
+    }
+
+    private func captureIsCurrent(ears: RealEars, eyes: RealEyes) -> Bool {
+        realEars === ears && realEyes === eyes
     }
 
     // Auto-retry real capture after a transient start failure, indefinitely (it is an
@@ -358,7 +681,7 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard let self else { return }
-                await self.watchdogTick()
+                self.watchdogTick()
             }
         }
     }
@@ -434,12 +757,18 @@ final class AppModel: ObservableObject {
     func isExpanded(_ id: String) -> Bool { expandedCardIds.contains(id) }
 
     func pause() {
+        watchdogTask?.cancel(); watchdogTask = nil
+        captureRetryTask?.cancel(); captureRetryTask = nil
         realEars?.stop(); realEyes?.stop()
         captureState = .paused
         status = "Paused. Nothing is captured, transcribed, read, or stored."
     }
 
     func resume() {
+        if !sessionActive {
+            startNewSession()
+            return
+        }
         if realEars != nil {
             captureState = .starting
             Task { await startCapture() }
@@ -450,10 +779,17 @@ final class AppModel: ObservableObject {
     }
 
     func toggleSimulated() {
+        let keepPaused = isPaused
+        let keepActive = sessionActive
         stopSession()
         liveLines.removeAll()
         useSimulated.toggle()
-        startSession()
+        if keepActive {
+            startSession(forcePaused: keepPaused ? true : nil)
+        } else {
+            captureState = .paused
+            status = "Session stopped. Start a new session when you're ready."
+        }
     }
 
     // MARK: - Live transcript ingestion (real path)
@@ -512,9 +848,12 @@ final class AppModel: ObservableObject {
     // MARK: - Simulated input (dev path)
 
     func injectLine(_ raw: String) {
-        guard useSimulated, !isPaused else { return }
+        guard useSimulated else { return }
+        if !sessionActive { startNewSession() }
+        guard !isPaused else { return }
         let (speaker, text) = Self.parseSpeaker(raw)
         guard !text.isEmpty else { return }
+        lastActivityAt = Date()
         simEars?.injectLine(text, speaker: speaker)
         // Show the typed line in the transcript too, attributed to the user.
         let line = LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You", source: .user,
@@ -525,9 +864,12 @@ final class AppModel: ObservableObject {
     }
 
     func injectScreen(_ text: String) {
-        guard useSimulated, !isPaused else { return }
+        guard useSimulated else { return }
+        if !sessionActive { startNewSession() }
+        guard !isPaused else { return }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        lastActivityAt = Date()
         simEyes?.inject(t)
         status = "Screen updated (stored, surfaced when pointed at)."
     }
@@ -547,6 +889,7 @@ final class AppModel: ObservableObject {
     }
 
     func summarize() {
+        guard let engine else { return }
         Task {
             if let s = await engine.summarize() {
                 let card = RichCard(trigger: .question, timestamp: Date(), route: .technical, tier: .medium,
@@ -557,8 +900,12 @@ final class AppModel: ObservableObject {
     }
 
     func loadFixture(_ name: String) {
-        guard useSimulated, !isPaused else {
+        guard useSimulated else {
             status = "Fixtures replay in simulated mode only."; return
+        }
+        if !sessionActive { startNewSession() }
+        guard !isPaused else {
+            status = "Resume to replay fixtures."; return
         }
         let paths = ["Tests/MaiCoreTests/Fixtures/\(name)", name]
         guard let path = paths.first(where: { FileManager.default.fileExists(atPath: $0) }),
@@ -581,6 +928,7 @@ final class AppModel: ObservableObject {
                     ears?.injectLine(body, speaker: speaker)
                     await MainActor.run {
                         guard let self else { return }
+                        self.lastActivityAt = Date()
                         let l = LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You",
                                                    source: .user, text: body, language: floor, isFinal: true)
                         self.liveLines.append(l)
@@ -614,7 +962,8 @@ final class AppModel: ObservableObject {
         guard noteTaking, line.isFinal else { return }
         let ml = MeetingLine(speaker: line.speaker, isUser: line.source == .user, text: line.text,
                              timestamp: Date(), language: line.language?.rawValue)
-        Task { [notes] in await notes!.add(ml) }
+        let notes = notes
+        Task { await notes.add(ml) }
     }
 
     // The meeting transcript so far, for assistant context (order-preserving).
@@ -637,7 +986,8 @@ final class AppModel: ObservableObject {
         // "note this down" folds the item into the running meeting notes.
         if let item = AssistantContext.noteRequest(trimmed) {
             if noteTaking {
-                Task { [notes] in await notes!.note(item) }
+                let notes = notes
+                Task { await notes.note(item) }
                 chat.append(ChatMessage(role: .assistant, text: item.isEmpty ? "Noted." : "Noted: \(item)"))
             } else {
                 chat.append(ChatMessage(role: .assistant, text: "Turn on note-taking first, then I can add that to the notes."))
@@ -648,8 +998,9 @@ final class AppModel: ObservableObject {
         let transcript = meetingTranscript()
         let history = chat
         assistantThinking = true
-        Task { [assistant] in
-            let reply = (try? await assistant!.reply(to: trimmed, transcript: transcript, history: history, screen: nil))
+        let assistant = assistant
+        Task {
+            let reply = (try? await assistant.reply(to: trimmed, transcript: transcript, history: history, screen: nil))
                 ?? "Sorry, I could not reach the assistant just now."
             await MainActor.run {
                 self.chat.append(ChatMessage(role: .assistant, text: reply))
@@ -663,7 +1014,8 @@ final class AppModel: ObservableObject {
     func toggleNoteTaking() { noteTaking ? stopNoteTaking() : startNoteTaking() }
 
     func startNoteTaking() {
-        Task { [notes] in await notes!.start(now: Date()) }
+        let notes = notes
+        Task { await notes.start(now: Date()) }
         noteTaking = true
         status = "Note-taking on. Mai is capturing the meeting."
     }
@@ -674,18 +1026,23 @@ final class AppModel: ObservableObject {
         let folder = notesFolder
         // Noted pinned cards are written into the export alongside the transcript notes.
         let extraNoted = notedCardIds.compactMap { notedCardLines[$0] }
-        Task { [notes] in
-            let export = await notes!.stop(now: Date(), folder: folder, extraNoted: extraNoted, onStage: { stage in
+        let notes = notes
+        Task {
+            let result = await notes.stopWithResult(now: Date(), folder: folder, extraNoted: extraNoted, onStage: { stage in
                 Task { @MainActor in self.notesProcessing = (stage == .done) ? nil : stage.rawValue }
             })
             await MainActor.run {
                 self.notesProcessing = nil
-                if let export {
+                if let export = result.export {
                     self.lastSavedMeeting = export
                     self.refreshSavedMeetings()
-                    self.status = folder == nil
-                        ? "Wrote up \"\(export.title)\" (choose a notes folder in Settings to save it)."
-                        : "Saved meeting: \(export.title)"
+                    if let saveError = result.saveError {
+                        self.status = "Wrote up \"\(export.title)\", but could not save it: \(saveError)"
+                    } else {
+                        self.status = folder == nil
+                            ? "Wrote up \"\(export.title)\" (choose a notes folder in Settings to save it)."
+                            : "Saved meeting: \(export.title)"
+                    }
                     self.onMeetingFinished?(export)   // phase B: a meeting just finished
                 } else {
                     self.status = "Nothing to save (no transcript was captured)."
@@ -703,7 +1060,13 @@ final class AppModel: ObservableObject {
 
     func openSavedMeeting(_ entry: MeetingIndexEntry) {
         guard let folder = notesFolder else { return }
-        NSWorkspace.shared.open(folder.appendingPathComponent(entry.docxFileName))
+        let url = folder.appendingPathComponent(entry.docxFileName)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            status = "Could not find \(entry.docxFileName) in the notes folder."
+            refreshSavedMeetings()
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func refreshSpend() async {
@@ -741,6 +1104,21 @@ final class AppModel: ObservableObject {
                 self.keyStatus = results
                 let bad = results.filter { $0.value != "OK" && $0.value != "Set" && $0.value != "Not set" }
                 self.status = bad.isEmpty ? "Keys checked." : "Key issues: " + bad.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
+            }
+        }
+    }
+
+    func refreshProviderHealth() {
+        providerHealthRunning = true
+        let cfg = config
+        let sec = secrets
+        Task {
+            let results = await ProviderHealth.check(config: cfg, secrets: sec)
+            await MainActor.run {
+                self.providerHealth = results
+                self.providerHealthRunning = false
+                let issues = results.filter { ![.ok, .setOnly, .notSet].contains($0.state) }
+                self.status = issues.isEmpty ? "Provider health checked." : "Provider health found \(issues.count) issue(s)."
             }
         }
     }
@@ -799,6 +1177,19 @@ final class AppModel: ObservableObject {
         if stale, let refreshed = try? url.bookmarkData() { UserDefaults.standard.set(refreshed, forKey: "mai.notesFolderBookmark") }
         return url
     }
+
+    private static let sessionTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    private static let fileStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f
+    }()
 
     func completeOnboarding() {
         onboardingComplete = true

@@ -73,10 +73,26 @@ public actor UsageMeter {
         }
     }
 
-    public func recordTranscription(seconds: Double) { counts.transcriptionSeconds += max(0, seconds); persist() }
-    public func recordVision() { counts.visionCalls += 1; persist() }
-    public func recordModel() { counts.modelCalls += 1; persist() }
-    public func recordSearch() { counts.searchCalls += 1; persist() }
+    public func recordTranscription(seconds: Double) {
+        rolloverIfNeeded()
+        counts.transcriptionSeconds += max(0, seconds)
+        persist()
+    }
+    public func recordVision() {
+        rolloverIfNeeded()
+        counts.visionCalls += 1
+        persist()
+    }
+    public func recordModel() {
+        rolloverIfNeeded()
+        counts.modelCalls += 1
+        persist()
+    }
+    public func recordSearch() {
+        rolloverIfNeeded()
+        counts.searchCalls += 1
+        persist()
+    }
 
     public func snapshot() -> UsageCounts { rolloverIfNeeded(); return counts }
 

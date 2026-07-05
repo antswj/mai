@@ -233,6 +233,10 @@ struct MiniCard: View {
                         }.buttonStyle(.link)
                     }
                 }
+                if let rating = card.rating {
+                    Text("quality \(rating.grade) \(String(format: "%.2f", rating.score))")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
                 if let action = card.action, let urlStr = action.params["url"], let url = URL(string: urlStr) {
                     Button(action.label) { NSWorkspace.shared.open(url) }.buttonStyle(.borderedProminent).controlSize(.small)
                 }

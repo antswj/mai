@@ -33,6 +33,9 @@ public enum EngineInput: Sendable {
 // moment its card is emitted (the user-perceived latency, which includes
 // classification), set on Card.latencyMs, and warned about past the hard cap.
 public actor Engine {
+    private static let promptContextMaxChars = 6_000
+    private static let screenContextMaxChars = 4_000
+
     private let config: Config
     private let store: MemoryStore
     private let verbatim: VerbatimLog
@@ -135,21 +138,22 @@ public actor Engine {
 
         // Bound the classifier call so a hung LLM request can never freeze the
         // always-on loop (a freeze here would stop every card until it unblocked).
-        let window = context.window()
+        let window = context.window(maxChars: Self.promptContextMaxChars)
         let ts = event.timestamp
-        let triggers = (await withTimeoutOrNil(seconds: max(8, config.onlineCapSeconds * 2)) { [classifier] in
+        let classifierCap = max(0.25, min(config.hardCapSeconds, config.onlineCapSeconds))
+        let triggers = (await withTimeoutOrNil(seconds: classifierCap) { [classifier] in
             await classifier.classify(window: window, now: ts)
         }) ?? []
         for trigger in triggers {
-            await handle(trigger, event: event, t0: t0)
+            await handle(trigger, event: event, window: window, t0: t0)
         }
     }
 
-    private func handle(_ trigger: Trigger, event: TranscriptEvent, t0: Date) async {
+    private func handle(_ trigger: Trigger, event: TranscriptEvent, window: String, t0: Date) async {
         if let enricher = richEnricher {
-            handleRich(trigger, event: event, t0: t0, enricher: enricher)
+            handleRich(trigger, event: event, window: window, t0: t0, enricher: enricher)
         } else {
-            await handleCard(trigger, event: event, t0: t0)
+            await handleCard(trigger, event: event, window: window, t0: t0)
         }
     }
 
@@ -157,7 +161,7 @@ public actor Engine {
 
     public func setChatOpen(_ open: Bool) { chatOpen = open }
 
-    private func handleRich(_ trigger: Trigger, event: TranscriptEvent, t0: Date, enricher: RichCardEnricher) {
+    private func handleRich(_ trigger: Trigger, event: TranscriptEvent, window: String, t0: Date, enricher: RichCardEnricher) {
         // Reply lock: a reference cue ("your turn", "ご意見を…") yields only a suggested
         // reply, so with the reply toggle off there is nothing to surface for it.
         // Info/fact cards (place, knowledge, screen) always surface regardless.
@@ -188,6 +192,12 @@ public actor Engine {
                                     info: currentScreenText.trimmingCharacters(in: .whitespacesAndNewlines),
                                     latencyMs: latencyMs)
                 card.pending = []
+                card.rating = CardRating.evaluate(card)
+                if card.rating?.useful == false {
+                    card.suppressed = true
+                    card.tier = .noise
+                    card.note = "low usefulness: \(card.rating?.grade ?? "weak")"
+                }
                 richSink?.upsert(card)
                 persistRich(card)
             }
@@ -207,11 +217,11 @@ public actor Engine {
             pending = [RichCard.Part.info.rawValue]
         case .reference:
             route = .preparedReply
-            request = .preparedReply(context: context.window(), asker: trigger.payload["speaker"], spoken: spoken)
+            request = .preparedReply(context: window, asker: trigger.payload["speaker"], spoken: spoken)
             pending = [RichCard.Part.response.rawValue]
         case .question, .intent:
             route = .pending
-            request = .knowledge(topic: topic.isEmpty ? trigger.span : topic, window: context.window(),
+            request = .knowledge(topic: topic.isEmpty ? trigger.span : topic, window: window,
                                  spoken: spoken, respond: config.responseEnabled)
             pending = [RichCard.Part.route.rawValue]
         case .screenReference:
@@ -252,21 +262,27 @@ public actor Engine {
     }
 
     private func persistRich(_ card: RichCard) {
+        guard !card.suppressed else { return }
         let c = card.toCard()
+        var meta = cardMeta(c)
+        if let rating = card.rating {
+            meta["rating"] = String(format: "%.2f", rating.score)
+            meta["ratingGrade"] = rating.grade
+        }
         save(record(kind: "card", content: cardSummaryLine(c), language: config.interfaceLanguage.rawValue,
-                    speaker: nil, at: c.timestamp, meta: cardMeta(c)))
+                    speaker: nil, at: c.timestamp, meta: meta))
         save(record(kind: "note", content: "Surfaced \(c.tier.rawValue) \(c.trigger.rawValue) card: \(c.title)",
                     language: config.interfaceLanguage.rawValue, speaker: nil, at: c.timestamp))
     }
 
     // MARK: - Card path (Step 1/2): unchanged
 
-    private func handleCard(_ trigger: Trigger, event: TranscriptEvent, t0: Date) async {
+    private func handleCard(_ trigger: Trigger, event: TranscriptEvent, window: String, t0: Date) async {
         // screenReference surfaces the current stored screen read; the screen is
         // already captured continuously, the verbal cue only prioritizes it.
         let (result, _) = await dispatcher.dispatch(
             trigger,
-            window: context.window(),
+            window: window,
             currentScreen: currentScreenText
         )
         guard var card = await cardize.make(trigger: trigger, result: result, now: event.timestamp) else { return }
@@ -330,7 +346,7 @@ public actor Engine {
         richSink?.upsert(skeleton)
         // Look the subject up like any knowledge query; the screen text is the context.
         // Interface language drives the answer; native subject names resolve cross-language.
-        let request = LookupRequest.knowledge(topic: subject, window: content,
+        let request = LookupRequest.knowledge(topic: subject, window: Self.clippedContext(content, maxChars: Self.screenContextMaxChars),
                                               spoken: config.interfaceLanguage, respond: false)
         let key = Surfacing.groupingKey(trigger: trig, headline: subject)
         Task { [weak self] in
@@ -381,6 +397,15 @@ public actor Engine {
     private func withLatency(_ c: Card, ms: Int) -> Card {
         Card(title: c.title, body: c.body, trigger: c.trigger, tier: c.tier, score: c.score,
              timestamp: c.timestamp, action: c.action, latencyMs: ms)
+    }
+
+    private static func clippedContext(_ text: String, maxChars: Int) -> String {
+        guard maxChars > 0 else { return "" }
+        guard text.count > maxChars else { return text }
+        let prefix = "[earlier content omitted to fit context]\n"
+        let budget = max(0, maxChars - prefix.count)
+        guard budget > 0 else { return String(prefix.prefix(maxChars)) }
+        return prefix + String(text.suffix(budget))
     }
 }
 

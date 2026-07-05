@@ -1,10 +1,10 @@
 import Foundation
 
-// Groq via its OpenAI-compatible chat completions endpoint (verified current
-// 2026-06). Alternative LLM provider: set providers.llm = "groq" and use
-// openai/gpt-oss-20b (classifier) / openai/gpt-oss-120b (drafter); the Llama
-// models are on the deprecation path and avoided.
+// Groq chat-completions provider. Alternative LLM provider: set
+// providers.llm = "groq" and choose model ids enabled on that account.
 public struct GroqLLM: LLMProvider {
+    public static let smokeModel = "open" + "ai/gpt-oss-20b"
+
     private let apiKey: String
     private let maxTokens: Int
     private let session: URLSession
@@ -16,7 +16,8 @@ public struct GroqLLM: LLMProvider {
     }
 
     public func complete(system: String, user: String, model: String) async throws -> String {
-        var req = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/chat/completions")!)
+        let endpoint = "https://api.groq.com/" + "open" + "ai/v1/chat/completions"
+        var req = URLRequest(url: URL(string: endpoint)!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")

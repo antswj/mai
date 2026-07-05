@@ -39,10 +39,15 @@ struct MenuBarView: View {
                 LivingGlow(presence: model.isPaused ? .idle : .listening)
                 Text(statusLine).font(.headline)
             }
+            Text(model.sessionLabel).font(.caption).foregroundStyle(.secondary)
             if model.noteTaking { Label("Note-taking on", systemImage: "record.circle.fill").foregroundStyle(.red) }
 
             Divider()
             Button(model.isPaused ? "Resume Capture" : "Pause Capture") { model.togglePause() }
+            Button(model.sessionActive ? "Stop Session" : "Start Session") {
+                model.sessionActive ? model.stopCurrentSession() : model.startNewSession()
+            }
+            Button("Start New Session") { model.startNewSession() }
             Button(model.micMuted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
             Button("Show Mission Mode") { summon() }
             Button("Open Mai") { openApp() }
@@ -86,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var power: PowerObserver?
     private var hudTimer: Timer?
     private var mainWindow: NSWindow?
+    private var pausedForSleep = false
 
     override init() {
         AppDelegate.useRepoWorkingDirectory()   // resolve .env/config/data before the model reads them
@@ -103,8 +109,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         HotKeyStore.apply()
 
         // Suspend capture on sleep, resume on wake.
-        power = PowerObserver(onSleep: { [weak self] in self?.model.pause() },
-                              onWake: { [weak self] in self?.model.resume() })
+        power = PowerObserver(
+            onSleep: { [weak self] in
+                guard let self else { return }
+                switch self.model.captureState {
+                case .starting, .capturing, .simulated:
+                    self.pausedForSleep = true
+                case .paused, .unavailable:
+                    self.pausedForSleep = false
+                }
+                if self.pausedForSleep { self.model.pause() }
+            },
+            onWake: { [weak self] in
+                guard let self, self.pausedForSleep else { return }
+                self.pausedForSleep = false
+                self.model.resume()
+            })
 
         // Phase B: a meeting just finished. The complete export bundle is already on
         // disk for a later phase to pick up; nothing is sent anywhere here.
@@ -119,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func tickHUD() {
+        model.autoSessionTick()
         guard let hud, !model.appWindowOpen else { hud?.hide(); return }
         // Only decide show vs hide here. The panel is a fixed size that fills itself, so
         // it is never resized per tick (that was the source of the jumping); repin runs

@@ -22,6 +22,7 @@ public final class SonioxClient: @unchecked Sendable {
     private var closed = false
     private var reconnecting = false
     private var attempts = 0
+    private var generation = 0
 
     public init(configJSON: String, onUpdate: @escaping UpdateHandler, onError: (@Sendable (String) -> Void)? = nil) {
         self.configJSON = configJSON
@@ -31,7 +32,15 @@ public final class SonioxClient: @unchecked Sendable {
     }
 
     public func connect() {
-        lock.withLock { closed = false }
+        let shouldOpen: Bool = lock.withLock {
+            if reconnecting { return false }
+            if !closed && task != nil { return false }
+            closed = false
+            generation += 1
+            attempts = 0
+            return true
+        }
+        guard shouldOpen else { return }
         openSocket()
         startKeepalive()
     }
@@ -40,7 +49,15 @@ public final class SonioxClient: @unchecked Sendable {
     // so a reconnect starts a fresh Soniox session, which is expected).
     private func openSocket() {
         let t = session.webSocketTask(with: Self.endpoint)
-        lock.withLock { task = t }
+        let shouldStart: Bool = lock.withLock {
+            guard !closed else { return false }
+            task = t
+            return true
+        }
+        guard shouldStart else {
+            t.cancel(with: .normalClosure, reason: nil)
+            return
+        }
         t.resume()
         t.send(.string(configJSON)) { [weak self] err in
             if let err { self?.onError?("soniox config send: \(err.localizedDescription)") }
@@ -67,6 +84,8 @@ public final class SonioxClient: @unchecked Sendable {
         let t: URLSessionWebSocketTask? = lock.withLock {
             if closed { return nil }
             closed = true
+            reconnecting = false
+            generation += 1
             let current = task
             task = nil
             return current
@@ -102,20 +121,26 @@ public final class SonioxClient: @unchecked Sendable {
     }
 
     private func scheduleReconnect() {
-        let go: Bool = lock.withLock {
-            if closed || reconnecting { return false }
+        let token: Int? = lock.withLock {
+            if closed || reconnecting { return nil }
             reconnecting = true
             attempts += 1
             task = nil
-            return true
+            return generation
         }
-        guard go else { return }
+        guard let token else { return }
         let delay = SonioxBackoff.delaySeconds(attempt: lock.withLock { attempts })
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard let self, !self.lock.withLock({ self.closed }) else { return }
+            guard let self else { return }
+            let shouldReconnect = self.lock.withLock {
+                !self.closed && self.generation == token
+            }
+            guard shouldReconnect else { return }
             self.openSocket()
-            self.lock.withLock { self.reconnecting = false }
+            self.lock.withLock {
+                if self.generation == token { self.reconnecting = false }
+            }
         }
     }
 
@@ -127,6 +152,7 @@ public final class SonioxClient: @unchecked Sendable {
     }
 
     private func startKeepalive() {
+        keepalive?.cancel()
         keepalive = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 10_000_000_000) // 10s

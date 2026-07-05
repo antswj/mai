@@ -15,6 +15,7 @@ public final class RealEyes: Eyes, @unchecked Sendable {
     private var latest: ScreenContentEvent?
     private var highlightedName: String?
     private var roster: [String] = []
+    private var readGeneration = 0
     var watcher: ScreenWatcher?
     public var usage: UsageMeter?   // spend meter: one vision read per settled screen change
 
@@ -45,10 +46,18 @@ public final class RealEyes: Eyes, @unchecked Sendable {
     func emit(content: String, subject: String? = nil, at: Date = Date()) {
         let event = ScreenContentEvent(content: content, timestamp: at, isChange: true, subject: subject)
         lock.withLock { latest = event }
-        if let usage { Task { await usage.recordVision() } }
         cont.yield(event)
     }
     func updateNaming(roster: [String], highlighted: String?) {
         lock.withLock { self.roster = roster; self.highlightedName = highlighted }
+    }
+    func nextReadGeneration() -> Int {
+        lock.withLock {
+            readGeneration += 1
+            return readGeneration
+        }
+    }
+    func isCurrentReadGeneration(_ generation: Int) -> Bool {
+        lock.withLock { generation == readGeneration }
     }
 }

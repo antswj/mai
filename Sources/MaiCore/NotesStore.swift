@@ -9,9 +9,9 @@ import Foundation
 // folder, plus a complete export bundle for a later phase to pick up. An actor, so
 // accumulation and the write-up never race.
 public actor NotesStore {
-    private let llm: LLMProvider
-    private let model: String
-    private let interface: Language
+    private var llm: LLMProvider
+    private var model: String
+    private var interface: Language
 
     private var active = false
     private var startedAt: Date?
@@ -25,6 +25,12 @@ public actor NotesStore {
     public func isActive() -> Bool { active }
     public func lineCount() -> Int { lines.count }
     public func notedCount() -> Int { noted.count }
+
+    public func update(llm: LLMProvider, model: String, interface: Language) {
+        self.llm = llm
+        self.model = model
+        self.interface = interface
+    }
 
     public func start(now: Date) {
         active = true; startedAt = now; lines.removeAll(); noted.removeAll()
@@ -52,11 +58,31 @@ public actor NotesStore {
         case done = "Done"
     }
 
+    public struct StopResult: Sendable, Equatable {
+        public let export: MeetingExport?
+        public let saveError: String?
+
+        public init(export: MeetingExport?, saveError: String?) {
+            self.export = export
+            self.saveError = saveError
+        }
+
+        public var savedToDisk: Bool { export != nil && saveError == nil }
+    }
+
     // Run the write-up pipeline. `onStage` reports the visible processing state.
     // Returns the export (also written to `folder` when provided), or nil if nothing
     // was captured.
     public func stop(now: Date, folder: URL?, extraNoted: [String] = [],
                      onStage: @Sendable (Stage) -> Void = { _ in }) async -> MeetingExport? {
+        await stopWithResult(now: now, folder: folder, extraNoted: extraNoted, onStage: onStage).export
+    }
+
+    // Same pipeline as `stop`, but preserves a disk-write failure so the app can show
+    // an honest status instead of claiming a meeting was saved when only the in-memory
+    // export exists.
+    public func stopWithResult(now: Date, folder: URL?, extraNoted: [String] = [],
+                               onStage: @Sendable (Stage) -> Void = { _ in }) async -> StopResult {
         active = false
         let started = startedAt ?? now
         let captured = lines
@@ -64,7 +90,7 @@ public actor NotesStore {
         // before BOTH the write-up and the verification pass read the noted list, so the
         // card content is written in AND treated as supported (not dropped by verify).
         let notedItems = noted + extraNoted.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard !captured.isEmpty || !notedItems.isEmpty else { return nil }
+        guard !captured.isEmpty || !notedItems.isEmpty else { return StopResult(export: nil, saveError: nil) }
 
         onStage(.reviewing)
         var notes = await writeUp(lines: captured, noted: notedItems)
@@ -81,9 +107,16 @@ public actor NotesStore {
         let export = MeetingExport(id: id, title: title, startedAt: started, endedAt: now,
                                    notes: notes, notedItems: notedItems, transcript: captured,
                                    docxFileName: base + ".docx", markdownFileName: base + ".md")
-        if let folder { try? save(export, to: folder) }
+        var saveError: String?
+        if let folder {
+            do {
+                try save(export, to: folder)
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
         onStage(.done)
-        return export
+        return StopResult(export: export, saveError: saveError)
     }
 
     // MARK: - Pipeline stages

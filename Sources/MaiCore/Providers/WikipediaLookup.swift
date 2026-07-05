@@ -72,8 +72,7 @@ public struct WikipediaLookup: EntityLookup {
     // MARK: - Cross-language link
 
     private func langlink(lang: String, title: String, to: String) async throws -> String? {
-        guard let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://\(lang).wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=langlinks&lllang=\(to)&redirects=1&titles=\(encodedTitle)") else { return nil }
+        guard let url = Self.langlinkURL(lang: lang, title: title, to: to) else { return nil }
         var req = URLRequest(url: url)
         req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: req)
@@ -84,6 +83,23 @@ public struct WikipediaLookup: EntityLookup {
               let links = pages.first?["langlinks"] as? [[String: Any]],
               let title = links.first?["title"] as? String, !title.isEmpty else { return nil }
         return title
+    }
+
+    static func langlinkURL(lang: String, title: String, to: String) -> URL? {
+        var comps = URLComponents()
+        comps.scheme = "https"
+        comps.host = "\(lang).wikipedia.org"
+        comps.path = "/w/api.php"
+        comps.queryItems = [
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "formatversion", value: "2"),
+            URLQueryItem(name: "prop", value: "langlinks"),
+            URLQueryItem(name: "lllang", value: to),
+            URLQueryItem(name: "redirects", value: "1"),
+            URLQueryItem(name: "titles", value: title),
+        ]
+        return comps.url
     }
 
     // MARK: - Translation fallback

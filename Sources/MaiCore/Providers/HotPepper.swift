@@ -40,8 +40,9 @@ public struct HotPepper: PlacesProvider {
             let plat = doubleOf(s["lat"])
             let plng = doubleOf(s["lng"])
             let url = (s["urls"] as? [String: Any])?["pc"] as? String
-            let dist: Double? = (plat != nil && plng != nil)
-                ? Geo.haversineMeters(lat1: lat, lng1: lng, lat2: plat!, lng2: plng!) : nil
+            let dist: Double? = if let plat, let plng {
+                Geo.haversineMeters(lat1: lat, lng1: lng, lat2: plat, lng2: plng)
+            } else { nil }
             return Place(name: name, source: "hotpepper", rating: nil, reviewCount: nil,
                          address: address, lat: plat, lng: plng, url: url, distanceMeters: dist)
         }

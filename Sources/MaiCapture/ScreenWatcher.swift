@@ -119,9 +119,18 @@ public final class ScreenWatcher: NSObject, SCStreamOutput, SCStreamDelegate, @u
     }
 
     private func jpeg(_ pixelBuffer: CVPixelBuffer) -> Data? {
-        let ci = CIImage(cvPixelBuffer: pixelBuffer)
+        let ci = visionImage(from: pixelBuffer)
         guard let cg = ciContext.createCGImage(ci, from: ci.extent) else { return nil }
         let rep = NSBitmapImageRep(cgImage: cg)
         return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+    }
+
+    private func visionImage(from pixelBuffer: CVPixelBuffer) -> CIImage {
+        let ci = CIImage(cvPixelBuffer: pixelBuffer)
+        let longEdge = max(ci.extent.width, ci.extent.height)
+        let maxLongEdge: CGFloat = 1920
+        guard longEdge > maxLongEdge else { return ci }
+        let scale = maxLongEdge / longEdge
+        return ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
     }
 }

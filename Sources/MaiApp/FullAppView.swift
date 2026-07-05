@@ -6,7 +6,7 @@ import MaiCore
 // (transcript, cards, notes) stays content. Opening and closing this window switches
 // modes; state is continuous with Mission mode because both share one AppModel.
 enum AppSection: String, CaseIterable, Identifiable {
-    case live = "Live", chat = "Chat", notes = "Notes", spend = "Spend"
+    case live = "Live", chat = "Chat", notes = "Notes", spend = "Spend", telemetry = "Telemetry", health = "Health"
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -14,6 +14,8 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .chat: return "bubble.left.and.bubble.right"
         case .notes: return "note.text"
         case .spend: return "dollarsign.circle"
+        case .telemetry: return "gauge.with.dots.needle.bottom.50percent"
+        case .health: return "stethoscope"
         }
     }
 }
@@ -36,6 +38,8 @@ struct FullAppView: View {
                 case .chat: ChatView(model: model).padding()
                 case .notes: NotesView(model: model)
                 case .spend: SpendView(model: model)
+                case .telemetry: LatencyTelemetryView(model: model)
+                case .health: ProviderHealthView(model: model)
                 }
             }
             .frame(minWidth: 560, minHeight: 480)
@@ -43,6 +47,19 @@ struct FullAppView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(model.noteTaking ? "Stop Note-Taking" : "Start Note-Taking") { model.toggleNoteTaking() }
+            }
+            ToolbarItem {
+                Button { model.startNewSession() } label: {
+                    Label("New Session", systemImage: "plus.rectangle.on.rectangle")
+                }
+                .help("Start a clean transcript and card session")
+            }
+            ToolbarItem {
+                Button { model.stopCurrentSession() } label: {
+                    Label("Stop Session", systemImage: "stop.circle")
+                }
+                .disabled(!model.sessionActive)
+                .help("Stop the current transcript and capture session")
             }
             ToolbarItem {
                 Button { model.toggleMute() } label: {
@@ -75,6 +92,10 @@ struct LiveAndCardsView: View {
                 .padding([.horizontal, .top], 8)
             }
             HSplitView {
+                if model.useSimulated {
+                    SimulatedInputView(model: model)
+                        .frame(minWidth: 280, idealWidth: 320, maxWidth: 380)
+                }
                 LiveTranscriptView(model: model).frame(minWidth: 300)
                 CardStreamView(model: model).frame(minWidth: 320)
             }

@@ -12,7 +12,7 @@ drafter    = "claude-sonnet-4-6"
 router     = "claude-haiku-4-5"    # fast lookup-route classifier (card brain); everything downstream waits on it
 screen     = "gemini-2.5-flash"   # Gemini vision model for screen reads (smoke test now, eyes later)
 # claude-opus-4-8 is available for heavy reasoning.
-# If providers.llm = "groq", use instead: classifier "openai/gpt-oss-20b", drafter "openai/gpt-oss-120b".
+# If providers.llm = "groq", set classifier/drafter to model ids enabled on that account.
 
 [stt]
 provider = "soniox"
@@ -29,7 +29,7 @@ model = "gemini-2.5-flash"          # Gemini Flash-family vision model for scree
 
 [latency]
 target_seconds = 3              # local-only lookups (trivial, cached entity) aim to land within this
-hard_cap_seconds = 5
+hard_cap_seconds = 3
 online_cap_seconds = 5          # hard ceiling on any single online enrichment (network call) before it gives up
 
 [lookup]

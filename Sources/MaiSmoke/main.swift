@@ -11,6 +11,9 @@ import MaiCapture
 //   swift run MaiSmoke llm        (Anthropic + Groq)
 //   swift run MaiSmoke places     (real Google + Hot Pepper merge, query "sushi")
 //   swift run MaiSmoke vision     (Gemini vision on a small embedded image)
+//   swift run MaiSmoke health     (provider health + Gemini quota/billing hints)
+//   swift run MaiSmoke golden     (replay golden anonymized bad-session traces)
+//   swift run MaiSmoke soak       (30-minute synthetic meeting soak, fast replay)
 //
 // This is the only caller of GeminiVision and the real provider HTTP paths in this
 // step; the engine path is exercised by `swift test` with stubs.
@@ -37,6 +40,25 @@ final class SonioxCollector: @unchecked Sendable {
     var finals: [SonioxSegment] { lock.withLock { _finals } }
 }
 
+final class SmokeRichSink: RichCardSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cards: [String: RichCard] = [:]
+    private var order: [String] = []
+    func upsert(_ card: RichCard) {
+        lock.withLock {
+            if cards[card.id] == nil { order.append(card.id) }
+            cards[card.id] = card
+        }
+    }
+    func suppressed(headline: String, trigger: TriggerType, reason: String) {
+        let card = RichCard(trigger: trigger, timestamp: Date(), route: .pending,
+                            tier: .noise, score: 0, headline: headline,
+                            pending: [], suppressed: true, note: reason)
+        upsert(card)
+    }
+    var all: [RichCard] { lock.withLock { order.compactMap { cards[$0] } } }
+}
+
 func smokeLLM() async {
     line(); print("LLM smoke test")
     if let key = secrets.get("ANTHROPIC_API_KEY") {
@@ -50,8 +72,8 @@ func smokeLLM() async {
     if let key = secrets.get("GROQ_API_KEY") {
         do {
             let out = try await GroqLLM(apiKey: key)
-                .complete(system: "You reply with one word.", user: "Say: ok", model: "openai/gpt-oss-20b")
-            print("  Groq (openai/gpt-oss-20b): \(out.trimmingCharacters(in: .whitespacesAndNewlines))")
+                .complete(system: "You reply with one word.", user: "Say: ok", model: GroqLLM.smokeModel)
+            print("  Groq (\(GroqLLM.smokeModel)): \(out.trimmingCharacters(in: .whitespacesAndNewlines))")
         } catch { print("  Groq ERROR: \(error)") }
     } else { print("  Groq: no GROQ_API_KEY, skipped") }
 }
@@ -218,6 +240,108 @@ func smokeEntity() async {
     }
 }
 
+func smokeHealth() async {
+    line(); print("Provider health smoke")
+    let results = await ProviderHealth.check(config: config, secrets: secrets)
+    for result in results {
+        print("  \(result.provider): \(result.state.rawValue) - \(result.message)")
+        if let hint = result.billingHint { print("    billing: \(hint)") }
+    }
+    let issueCount = results.filter { ![.ok, .setOnly, .notSet].contains($0.state) }.count
+    print("  RESULT: \(issueCount == 0 ? "ok" : "attention (\(issueCount) issue(s))")")
+}
+
+func smokeSoak(minutes: Int = 30) async {
+    line(); print("Synthetic meeting soak (\(minutes) min simulated, fast replay)")
+    print("  generated audio turns, screen changes, language switches, interruptions, repeated topics")
+    let trace = SyntheticSoak.trace(durationMinutes: minutes)
+    let sink = SmokeRichSink()
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mai-soak-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
+    let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
+    let cfg = Config(hardCapSeconds: 3, responseEnabled: true, onlineCapSeconds: 5)
+    let engine = Engine(config: cfg,
+                        llm: StubLLM(),
+                        places: CachedPlacesProvider(base: StubPlaces()),
+                        location: FixedLocation(lat: cfg.testLat, lng: cfg.testLng),
+                        store: store,
+                        verbatim: verbatim,
+                        face: ConsoleFace(),
+                        richSink: sink,
+                        entity: CachedEntityLookup(base: StubEntityLookup()),
+                        grounded: CachedGroundedSearch(base: StubGroundedSearch()))
+
+    let started = Date()
+    for event in trace.events {
+        await engine.process(trace.input(for: event))
+    }
+    for _ in 0..<500 {
+        if !sink.all.contains(where: { !$0.pending.isEmpty }) { break }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    let elapsed = Date().timeIntervalSince(started)
+    let report = SyntheticSoak.report(cards: sink.all, durationMinutes: minutes, eventCount: trace.events.count)
+    print("  replay wall time: \(String(format: "%.2f", elapsed))s")
+    print("  events: \(report.eventCount), resolved cards: \(report.resolvedCards), suppressed: \(report.suppressedCards), weak: \(report.weakCards)")
+    print("  max first-paint: \(report.maxFirstPaintMs) ms, max final-fill: \(report.maxFinalFillMs) ms")
+    print("  routes: \(report.routeCounts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))")
+    for note in report.notes { print("  note: \(note)") }
+    let ok = report.resolvedCards > 0 && report.weakCards == 0 && report.maxFirstPaintMs <= 3000
+    print("  RESULT: \(ok ? "ok" : "attention")")
+}
+
+func smokeGolden() async {
+    line(); print("Golden trace regression smoke")
+    let path = "Tests/MaiCoreTests/Fixtures/golden_trace_bad_session_v1.json"
+    guard let data = FileManager.default.contents(atPath: path),
+          let trace = try? JSONDecoder.mai.decode(MaiTrace.self, from: data) else {
+        print("  fixture missing from repo checkout: \(path)")
+        print("  RESULT: skipped")
+        return
+    }
+    let sink = SmokeRichSink()
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mai-golden-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
+    let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
+    let cfg = Config(hardCapSeconds: 3, responseEnabled: true, onlineCapSeconds: 5)
+    let engine = Engine(config: cfg,
+                        llm: StubLLM(),
+                        places: CachedPlacesProvider(base: StubPlaces(),
+                                                     cacheURL: dir.appendingPathComponent("places.json")),
+                        location: FixedLocation(lat: cfg.testLat, lng: cfg.testLng),
+                        store: store,
+                        verbatim: verbatim,
+                        face: ConsoleFace(),
+                        richSink: sink,
+                        entity: CachedEntityLookup(base: StubEntityLookup(),
+                                                   cacheURL: dir.appendingPathComponent("entity.json")),
+                        grounded: CachedGroundedSearch(base: StubGroundedSearch(),
+                                                       cacheURL: dir.appendingPathComponent("grounded.json")))
+
+    let started = Date()
+    for event in trace.events {
+        await engine.process(trace.input(for: event))
+    }
+    for _ in 0..<400 {
+        let cards = sink.all
+        if cards.count >= 6 && !cards.contains(where: { !$0.suppressed && !$0.pending.isEmpty }) { break }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    let cards = sink.all.filter { !$0.suppressed && $0.pending.isEmpty }
+    let routes = Set(cards.map(\.route.rawValue))
+    let weak = cards.filter { ($0.rating?.score ?? 0) < CardRating.usefulThreshold }.count
+    let maxFirst = cards.compactMap(\.latencyMs).max() ?? 0
+    let elapsed = Date().timeIntervalSince(started)
+    print("  replay wall time: \(String(format: "%.2f", elapsed))s")
+    print("  events: \(trace.events.count), cards: \(cards.count), weak: \(weak), max first-paint: \(maxFirst) ms")
+    print("  routes: \(routes.sorted().joined(separator: ", "))")
+    let ok = cards.count >= 6 && weak == 0 && maxFirst <= 3000
+        && routes.contains("fresh") && routes.contains("technical") && routes.contains("preparedReply")
+    print("  RESULT: \(ok ? "ok" : "attention")")
+}
+
 switch which {
 case "llm": await smokeLLM()
 case "places": await smokePlaces()
@@ -227,8 +351,13 @@ case "screen": await smokeScreen()
 case "vad": smokeVAD()
 case "grounded": await smokeGrounded()
 case "entity": await smokeEntity()
+case "health": await smokeHealth()
+case "golden": await smokeGolden()
+case "soak":
+    let minutes = args.dropFirst().first.flatMap(Int.init) ?? 30
+    await smokeSoak(minutes: minutes)
 default:
     await smokeLLM(); await smokePlaces(); await smokeVision(); await smokeSoniox(); await smokeScreen()
-    smokeVAD(); await smokeEntity(); await smokeGrounded()
+    smokeVAD(); await smokeEntity(); await smokeGrounded(); await smokeHealth(); await smokeGolden(); await smokeSoak(minutes: 30)
 }
 line(); print("Smoke tests done.")

@@ -57,8 +57,9 @@ public enum Readings {
             let word = ns.substring(with: NSRange(location: start, length: len))
             var reading: String? = nil
             if containsHan(word),
-               let attr = CFStringTokenizerCopyCurrentTokenAttribute(tk, kCFStringTokenizerAttributeLatinTranscription) {
-                let hira = latinToHiragana((attr as! CFString) as String)
+               let attr = CFStringTokenizerCopyCurrentTokenAttribute(tk, kCFStringTokenizerAttributeLatinTranscription),
+               let latin = attr as? String {
+                let hira = latinToHiragana(latin)
                 if !hira.isEmpty, hira != word { reading = hira }
             }
             units.append(RubyUnit(base: word, reading: reading))

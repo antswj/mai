@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var onset: Double = 0.5
     @State private var offset: Double = 0.35
     @State private var hangover: Double = 4
+    @State private var idleMinutes: Double = 20
+    @State private var maxHours: Double = 4
 
     private func langBinding(_ keyPath: WritableKeyPath<Config, Language>) -> Binding<Language> {
         Binding(get: { model.config[keyPath: keyPath] }, set: { v in model.updateConfig { $0[keyPath: keyPath] = v } })
@@ -32,7 +34,8 @@ struct SettingsView: View {
 
             Section("Cards") {
                 Toggle("Suggested replies", isOn: Binding(get: { model.responseEnabled }, set: { _ in model.toggleResponse() }))
-                Toggle("Show suppressed cards", isOn: $model.showSuppressed)
+                Toggle("Show suppressed cards", isOn: Binding(get: { model.showSuppressed },
+                                                              set: { model.setShowSuppressed($0) }))
                 VStack(alignment: .leading) {
                     Text("Surfacing sensitivity")
                     Slider(value: $threshold, in: 0.3...0.9, step: 0.05) { editing in
@@ -54,6 +57,17 @@ struct SettingsView: View {
                 LabeledContent("Summon shortcut") { HotkeyRecorder() }
                 Text("A global shortcut that brings up Mission mode and focuses the ask field from any app.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Sessions") {
+                Toggle("Auto session rollover", isOn: Binding(get: { model.config.sessionAutoRollover },
+                                                              set: { v in model.updateConfig { $0.sessionAutoRollover = v } }))
+                slider("Idle rollover (minutes)", $idleMinutes, 5...120, step: 5) {
+                    model.updateConfig { $0.sessionIdleRolloverSeconds = idleMinutes * 60 }
+                }
+                slider("Max session length (hours)", $maxHours, 1...12, step: 1) {
+                    model.updateConfig { $0.sessionMaxSeconds = maxHours * 60 * 60 }
+                }
             }
 
             Section("Notes Folder") {
@@ -87,6 +101,8 @@ struct SettingsView: View {
             onset = model.config.vadOnset
             offset = model.config.vadOffset
             hangover = model.config.vadSilenceHangoverSeconds
+            idleMinutes = model.config.sessionIdleRolloverSeconds / 60
+            maxHours = model.config.sessionMaxSeconds / 3600
         }
     }
 

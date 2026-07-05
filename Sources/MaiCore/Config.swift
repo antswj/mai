@@ -40,6 +40,9 @@ public struct Config: Sendable {
     public var screenFrameIntervalSeconds: Double
     public var captureSource: String
     public var startPaused: Bool
+    public var sessionAutoRollover: Bool
+    public var sessionIdleRolloverSeconds: Double
+    public var sessionMaxSeconds: Double
     public var showLiveTranscript: Bool
     public var ruby: Bool
     // Step 3: card intelligence (lookup router), the response toggle, latency caps,
@@ -70,7 +73,7 @@ public struct Config: Sendable {
         drafterModel: String = "claude-sonnet-4-6",
         screenModel: String = "gemini-2.5-flash",
         targetSeconds: Double = 3,
-        hardCapSeconds: Double = 5,
+        hardCapSeconds: Double = 3,
         maxTurns: Int = 12,
         maxSeconds: Double = 120,
         threshold: Double = 0.6,
@@ -97,6 +100,9 @@ public struct Config: Sendable {
         screenFrameIntervalSeconds: Double = 1.0,
         captureSource: String = "main_display",
         startPaused: Bool = false,
+        sessionAutoRollover: Bool = true,
+        sessionIdleRolloverSeconds: Double = 20 * 60,
+        sessionMaxSeconds: Double = 4 * 60 * 60,
         showLiveTranscript: Bool = true,
         ruby: Bool = true,
         lookupEnabled: Bool = true,
@@ -127,6 +133,9 @@ public struct Config: Sendable {
         self.translationEngine = translationEngine
         self.screenSettleSeconds = screenSettleSeconds; self.screenFrameIntervalSeconds = screenFrameIntervalSeconds
         self.captureSource = captureSource; self.startPaused = startPaused
+        self.sessionAutoRollover = sessionAutoRollover
+        self.sessionIdleRolloverSeconds = sessionIdleRolloverSeconds
+        self.sessionMaxSeconds = sessionMaxSeconds
         self.showLiveTranscript = showLiveTranscript; self.ruby = ruby
         self.lookupEnabled = lookupEnabled; self.lookupRouterModel = lookupRouterModel
         self.responseEnabled = responseEnabled; self.onlineCapSeconds = onlineCapSeconds
@@ -182,6 +191,9 @@ public struct Config: Sendable {
         if let v = dbl("screen", "frame_interval_seconds") { c.screenFrameIntervalSeconds = v }
         if let v = str("screen", "capture_source") { c.captureSource = v }
         if let v = bln("capture", "start_paused") { c.startPaused = v }
+        if let v = bln("session", "auto_rollover") { c.sessionAutoRollover = v }
+        if let v = dbl("session", "idle_rollover_seconds") { c.sessionIdleRolloverSeconds = v }
+        if let v = dbl("session", "max_seconds") { c.sessionMaxSeconds = v }
         if let v = bln("transcript", "show_live") { c.showLiveTranscript = v }
         if let v = bln("transcript", "ruby") { c.ruby = v }
         // Step 3 sections.
@@ -256,11 +268,7 @@ enum TOML {
         var result: [String: [String: TOMLValue]] = [:]
         var section = ""
         for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
-            var line = String(rawLine)
-            if let hash = line.firstIndex(of: "#") {
-                // strip trailing comment (config.toml has no '#' inside string values)
-                line = String(line[..<hash])
-            }
+            var line = stripComment(String(rawLine))
             line = line.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             if line.hasPrefix("[") && line.hasSuffix("]") {
@@ -274,6 +282,31 @@ enum TOML {
             result[section, default: [:]][key] = parseValue(rhs)
         }
         return result
+    }
+
+    private static func stripComment(_ line: String) -> String {
+        var out = ""
+        var quote: Character?
+        var escaping = false
+        for ch in line {
+            if let q = quote {
+                out.append(ch)
+                if q == "\"", ch == "\\", !escaping {
+                    escaping = true
+                    continue
+                }
+                if ch == q, !escaping { quote = nil }
+                escaping = false
+            } else if ch == "\"" || ch == "'" {
+                quote = ch
+                out.append(ch)
+            } else if ch == "#" {
+                break
+            } else {
+                out.append(ch)
+            }
+        }
+        return out
     }
 
     private static func parseValue(_ s: String) -> TOMLValue {

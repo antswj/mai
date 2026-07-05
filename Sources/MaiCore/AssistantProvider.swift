@@ -75,21 +75,17 @@ public enum AssistantContext {
     // Detect a "note this down" request and return the item to note (possibly empty,
     // meaning "note the most recent point"); nil if the message is not a note request.
     public static func noteRequest(_ message: String) -> String? {
-        let low = message.lowercased()
         let triggers = ["note this down", "note that down", "add to the notes", "add to notes",
                         "take a note", "make a note", "note this", "note that",
                         "メモして", "メモto", "記録して", "记下来", "记一下", "記下來"]
         for t in triggers {
             let isCJK = t.unicodeScalars.contains { $0.value > 0x2000 }
-            let hit = isCJK ? message.contains(t) : low.contains(t)
-            guard hit else { continue }
+            let options: String.CompareOptions = isCJK ? [] : [.caseInsensitive]
             // Item = the text after the trigger (or after a colon), trimmed.
-            if let r = (isCJK ? message.range(of: t) : low.range(of: t)) {
-                let tail = String(message[r.upperBound...])
-                let item = tail.trimmingCharacters(in: CharacterSet(charactersIn: " :：,，-。、\t"))
-                return item
-            }
-            return ""
+            guard let r = message.range(of: t, options: options) else { continue }
+            let tail = String(message[r.upperBound...])
+            let item = tail.trimmingCharacters(in: CharacterSet(charactersIn: " :：,，-。、\t"))
+            return item
         }
         return nil
     }

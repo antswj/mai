@@ -31,6 +31,7 @@ public actor RichCardEnricher {
     private let floor: Language
 
     private var tasks: [String: Task<Void, Never>] = [:]
+    private var taskTokens: [String: Int] = [:]
 
     public init(config: Config, llm: LLMProvider, entity: EntityLookup, grounded: GroundedSearch,
                 places: PlacesProvider, location: LocationProvider, sink: RichCardSink) {
@@ -51,10 +52,12 @@ public actor RichCardEnricher {
     public func submit(_ skeleton: RichCard, request: LookupRequest,
                        supersedeKey: String, onComplete: @escaping @Sendable (RichCard) -> Void) {
         tasks[supersedeKey]?.cancel()
+        let token = (taskTokens[supersedeKey] ?? 0) + 1
+        taskTokens[supersedeKey] = token
         let task = Task { [weak self] in
             guard let self else { return }
             await self.run(skeleton, request: request, onComplete: onComplete)
-            await self.clear(supersedeKey)
+            await self.clear(supersedeKey, token: token)
         }
         tasks[supersedeKey] = task
     }
@@ -62,9 +65,14 @@ public actor RichCardEnricher {
     public func cancelAll() {
         for t in tasks.values { t.cancel() }
         tasks.removeAll()
+        taskTokens.removeAll()
     }
 
-    private func clear(_ key: String) { tasks[key] = nil }
+    private func clear(_ key: String, token: Int) {
+        guard taskTokens[key] == token else { return }
+        tasks[key] = nil
+        taskTokens[key] = nil
+    }
     private func emit(_ card: RichCard) { if !Task.isCancelled { sink.upsert(card) } }
 
     // MARK: - Run
@@ -78,6 +86,7 @@ public actor RichCardEnricher {
             card.route = .screen
             card.info = text.trimmingCharacters(in: .whitespacesAndNewlines)
             card.pending.removeAll()
+            rate(&card, final: true)
             emit(card)
 
         case .place(let query):
@@ -93,18 +102,20 @@ public actor RichCardEnricher {
 
         case .knowledge(let topic, let window, let spoken, let respond):
             // Route first (its own timeout + default-route fallback), then enrich.
-            let routerCap = min(config.onlineCapSeconds, 3)
+            let routerCap = min(config.onlineCapSeconds, 1.5)
             let plan = (await withTimeoutOrNil(seconds: routerCap) { [router] in await router.plan(topic: topic, window: window, spoken: spoken) })
                 ?? LookupRouter.fallback(topic: topic, spoken: spoken)
             card.route = plan.route
             card.timings["route"] = ms(t0)
             card.pending = pendingForKnowledge(plan: plan, respond: respond)
+            rate(&card, final: false)
             emit(card)
 
             if plan.route == .trivial {
                 card.info = plan.trivialAnswer
                 card.pending.remove(RichCard.Part.info.rawValue)
                 card.timings["info"] = ms(t0)
+                rate(&card, final: !respond)
                 emit(card)
                 if respond { await runResponseOnly(&card, window: window, screen: "", spoken: spoken) }
             } else {
@@ -114,6 +125,7 @@ public actor RichCardEnricher {
         }
 
         card.pending.removeAll()
+        rate(&card, final: true)
         emit(card)
         if !Task.isCancelled { onComplete(card) }
     }
@@ -131,6 +143,7 @@ public actor RichCardEnricher {
             for await outcome in group {
                 if Task.isCancelled { break }
                 apply(outcome, to: &card)
+                rate(&card, final: false)
                 emit(card)
             }
         }
@@ -141,6 +154,7 @@ public actor RichCardEnricher {
         let r = await fetchResponse(window: window, screen: screen, spoken: spoken)
         if Task.isCancelled { return }
         apply(.response(r, ms(s)), to: &card)
+        rate(&card, final: false)
         emit(card)
     }
 
@@ -327,6 +341,23 @@ public actor RichCardEnricher {
 
     private func produced(_ c: ContentOutcome) -> Bool {
         c.info != nil || c.response != nil || c.source != nil || c.image != nil || c.action != nil
+    }
+
+    private func rate(_ card: inout RichCard, final: Bool) {
+        let rating = CardRating.evaluate(card)
+        card.rating = rating
+        if rating.useful {
+            card.score = max(card.score, rating.score)
+            if rating.score >= 0.85 { card.tier = .critical }
+            else if card.tier == .noise { card.tier = .medium }
+            return
+        }
+        guard final else { return }
+        card.suppressed = true
+        card.tier = .noise
+        card.score = min(card.score, rating.score)
+        let reasons = rating.reasons.prefix(3).joined(separator: ", ")
+        card.note = "low usefulness: \(rating.grade)\(reasons.isEmpty ? "" : " (\(reasons))")"
     }
 
     private func pendingForKnowledge(plan: LookupPlan, respond: Bool) -> Set<String> {

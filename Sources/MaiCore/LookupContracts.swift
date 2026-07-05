@@ -6,7 +6,7 @@ import Foundation
 
 // A known-entity result, already resolved into the interface language. Image and
 // source are real or nil; nothing is fabricated.
-public struct EntityResult: Sendable, Equatable {
+public struct EntityResult: Codable, Sendable, Equatable {
     public let title: String
     public let summary: String       // in the interface language
     public let imageURL: String?     // real thumbnail URL or nil
@@ -21,7 +21,7 @@ public struct EntityResult: Sendable, Equatable {
 // A grounded web-search result: a synthesized answer in the interface language plus
 // the real web sources it was grounded on, and (for attribution) Google's Search
 // Suggestions widget HTML when present.
-public struct GroundedResult: Sendable, Equatable {
+public struct GroundedResult: Codable, Sendable, Equatable {
     public let answer: String            // in the interface language
     public let sources: [RichSource]     // real web results
     public let searchSuggestionHTML: String?

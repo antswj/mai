@@ -20,7 +20,8 @@ struct CardStreamView: View {
                                               set: { _ in model.toggleResponse() }))
                     .toggleStyle(.switch).controlSize(.small)
                     .help("Suggest a reply when one is clearly warranted")
-                Toggle("Suppressed", isOn: $model.showSuppressed)
+                Toggle("Suppressed", isOn: Binding(get: { model.showSuppressed },
+                                                   set: { model.setShowSuppressed($0) }))
                     .toggleStyle(.switch).controlSize(.small)
             }
             Divider()
@@ -34,7 +35,9 @@ struct CardStreamView: View {
             let flowing = model.flowingCards
             if flowing.isEmpty && model.pinnedCards.isEmpty {
                 Spacer()
-                Text("No cards yet. Type a line or load a fixture on the left.")
+                Text(model.useSimulated
+                     ? "No cards yet. Type a line or load a fixture in simulated input."
+                     : "No cards yet. Relevant moments will appear here while Mai listens.")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity)
                 Spacer()
             } else {
@@ -42,6 +45,7 @@ struct CardStreamView: View {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(flowing) { card in
                             RichCardRow(card: card, ruby: model.config.ruby) {
+                                FeedbackButtons(model: model, card: card)
                                 Button { model.pin(card) } label: { Image(systemName: "pin") }
                                     .buttonStyle(.plain).help("Pin this card").accessibilityLabel("Pin card")
                             }
@@ -84,6 +88,7 @@ struct PinnedCarouselView: View {
                 let card = model.pinnedCards[index]
                 ScrollView {
                     RichCardRow(card: card, ruby: model.config.ruby) {
+                        FeedbackButtons(model: model, card: card)
                         Button { model.toggleNoteCard(card) } label: {
                             Image(systemName: model.isNoted(card.id) ? "note.text.badge.plus" : "note.text")
                                 .foregroundStyle(model.isNoted(card.id) ? Color.accentColor : Color.secondary)
@@ -135,6 +140,8 @@ struct RichCardRow<Controls: View>: View {
             HStack(spacing: 8) {
                 TierBadge(tier: card.tier)
                 Text(card.headline).font(.system(.body, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 if card.isLoading { ProgressView().controlSize(.small) }
                 controls
@@ -146,16 +153,18 @@ struct RichCardRow<Controls: View>: View {
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
-                            .frame(maxWidth: .infinity, maxHeight: 160).clipped()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 160)
+                            .clipped()
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     default:
                         RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
-                            .frame(height: 90).overlay(ProgressView().controlSize(.small))
+                            .frame(height: 160).overlay(ProgressView().controlSize(.small))
                     }
                 }
             } else if card.isPending(.image) {
                 RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
-                    .frame(height: 90).overlay(ProgressView().controlSize(.small))
+                    .frame(height: 160).overlay(ProgressView().controlSize(.small))
             }
 
             // The answer, in the interface language.
@@ -208,7 +217,11 @@ struct RichCardRow<Controls: View>: View {
 
             HStack(spacing: 10) {
                 Text(card.route.rawValue)
-                Text(String(format: "score %.2f", card.score))
+                if let rating = card.rating {
+                    Text("quality \(rating.grade) \(String(format: "%.2f", rating.score))")
+                } else {
+                    Text(String(format: "score %.2f", card.score))
+                }
                 if let ms = card.latencyMs { Text("\(ms) ms") }
                 if let why = card.note, card.suppressed { Text("suppressed: \(why)").italic() }
             }

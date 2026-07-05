@@ -66,7 +66,7 @@ public enum MarkdownTranscript {
     }
 
     public static func write(title: String, lines: [MeetingLine], startedAt: Date, endedAt: Date, to url: URL) throws {
-        try render(title: title, lines: lines, startedAt: startedAt, endedAt: endedAt)
-            .data(using: .utf8)?.write(to: url, options: .atomic)
+        let markdown = render(title: title, lines: lines, startedAt: startedAt, endedAt: endedAt)
+        try Data(markdown.utf8).write(to: url, options: .atomic)
     }
 }

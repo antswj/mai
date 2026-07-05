@@ -320,8 +320,8 @@ Open `config.toml`:
 - Raise `[surfacing] threshold` for fewer cards, lower it for more.
 - Keep `show_suppressed_log = true` to watch what was filtered while you tune.
 - Switch the LLM provider with `[providers] llm` (`anthropic` or `groq`). If you set
-  `groq`, also set `[models] classifier = "openai/gpt-oss-20b"` and
-  `drafter = "openai/gpt-oss-120b"`.
+  `groq`, also set `[models] classifier` and `drafter` to model ids enabled on that
+  account.
 
 Model names, providers, languages, latency targets, and the test location all live
 in `config.toml`, so a change is one edit plus a restart.
@@ -379,6 +379,8 @@ Step-3 knobs, also in `config.toml`:
   swift run MaiSmoke vad      # on-device Silero VAD runs on silence and a tone
   swift run MaiSmoke entity   # Wikipedia summary + cross-language (寿司, 马来西亚)
   swift run MaiSmoke grounded # Gemini grounded web search with real sources
+  swift run MaiSmoke health   # provider health, including Gemini quota/billing hints
+  swift run MaiSmoke soak     # 30-minute synthetic meeting soak, replayed fast
   ```
 
   The `soniox` check needs a funded Soniox account; with an empty balance it prints

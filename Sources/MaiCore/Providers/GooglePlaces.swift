@@ -42,8 +42,9 @@ public struct GooglePlaces: PlacesProvider {
             let plat = loc?["latitude"] as? Double
             let plng = loc?["longitude"] as? Double
             let url = p["googleMapsUri"] as? String
-            let dist: Double? = (plat != nil && plng != nil)
-                ? Geo.haversineMeters(lat1: lat, lng1: lng, lat2: plat!, lng2: plng!) : nil
+            let dist: Double? = if let plat, let plng {
+                Geo.haversineMeters(lat1: lat, lng1: lng, lat2: plat, lng2: plng)
+            } else { nil }
             return Place(name: name, source: "google", rating: rating, reviewCount: reviews,
                          address: address, lat: plat, lng: plng, url: url, distanceMeters: dist)
         }
