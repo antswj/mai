@@ -5,68 +5,16 @@ import MaiCore
 // Mai is a menu bar agent (the 24/7 anchor) with two faces: Mission mode (a floating
 // HUD panel, managed by the AppDelegate) and the full app window (also AppKit-managed
 // so opening it flips to a regular app with standard menus and closing it reverts to
-// the resting HUD). One AppModel is shared by both faces and the menu bar, so the
+// the resting HUD). One AppModel is shared by both faces and the status item, so the
 // transcript, cards, and notes are continuous.
 @main
 struct MaiApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra("Mai", systemImage: "sparkles") {
-            MenuBarView(model: delegate.model,
-                        openApp: { delegate.openMain() },
-                        summon: { delegate.summon() })
-        }
-        .menuBarExtraStyle(.window)
-
         // Settings, reachable with Command-comma (a standard macOS preferences window).
         Settings {
             SettingsView(model: delegate.model)
-        }
-    }
-}
-
-// The menu bar popover: the always-on anchor. Status, a one-click pause, and quick
-// access to Mission mode and the full app. Title-style labels.
-struct MenuBarView: View {
-    @ObservedObject var model: AppModel
-    var openApp: () -> Void
-    var summon: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                LivingGlow(presence: model.isPaused ? .idle : .listening)
-                Text(statusLine).font(.headline)
-            }
-            Text(model.sessionLabel).font(.caption).foregroundStyle(.secondary)
-            if model.noteTaking { Label("Note-taking on", systemImage: "record.circle.fill").foregroundStyle(.red) }
-
-            Divider()
-            Button(model.isPaused ? "Resume Capture" : "Pause Capture") { model.togglePause() }
-            Button(model.sessionActive ? "Stop Session" : "Start Session") {
-                model.sessionActive ? model.stopCurrentSession() : model.startNewSession()
-            }
-            Button("Start New Session") { model.startNewSession() }
-            Button(model.micMuted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
-            Button("Show Mission Mode") { summon() }
-            Button("Open Mai") { openApp() }
-            Divider()
-            Button(model.noteTaking ? "Stop Note-Taking" : "Start Note-Taking") { model.toggleNoteTaking() }
-            Divider()
-            Button("Quit Mai") { NSApplication.shared.terminate(nil) }
-        }
-        .padding(12)
-        .frame(width: 260)
-    }
-
-    private var statusLine: String {
-        switch model.captureState {
-        case .capturing: return "Listening"
-        case .paused: return "Paused"
-        case .simulated: return "Simulated input"
-        case .starting: return "Starting\u{2026}"
-        case .unavailable: return "Capture unavailable"
         }
     }
 }
@@ -91,6 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var power: PowerObserver?
     private var hudTimer: Timer?
     private var mainWindow: NSWindow?
+    private var statusItem: NSStatusItem?
+    private weak var statusLineMenuItem: NSMenuItem?
+    private weak var sessionLineMenuItem: NSMenuItem?
+    private weak var pauseMenuItem: NSMenuItem?
+    private weak var sessionMenuItem: NSMenuItem?
+    private weak var muteMenuItem: NSMenuItem?
+    private weak var notesMenuItem: NSMenuItem?
     private var pausedForSleep = false
 
     override init() {
@@ -103,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)   // resting state: a menu bar agent
 
         hud = MissionHUDController(model: model)
+        installStatusItem()
 
         // Global summon hotkey (user sets it in Settings; no default is shipped).
         GlobalHotKey.shared.onFire = { [weak self] in self?.summon() }
@@ -148,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func tickHUD() {
         model.autoSessionTick()
+        updateStatusMenu()
         guard let hud, !model.appWindowOpen else { hud?.hide(); return }
         // Only decide show vs hide here. The panel is a fixed size that fills itself, so
         // it is never resized per tick (that was the source of the jumping); repin runs
@@ -156,6 +113,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if !hud.isVisible { hud.show() }
         }
         else if hud.isVisible { hud.hide() }
+    }
+
+    private func installStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = item
+
+        if let button = item.button {
+            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Mai")
+            button.image?.isTemplate = true
+            button.toolTip = "Mai"
+        }
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let statusLine = NSMenuItem(title: statusMenuTitle, action: nil, keyEquivalent: "")
+        statusLine.isEnabled = false
+        statusLineMenuItem = statusLine
+        menu.addItem(statusLine)
+
+        let sessionLine = NSMenuItem(title: model.sessionLabel, action: nil, keyEquivalent: "")
+        sessionLine.isEnabled = false
+        sessionLineMenuItem = sessionLine
+        menu.addItem(sessionLine)
+
+        menu.addItem(.separator())
+        addMenuItem("Open Mai", to: menu, action: #selector(statusOpenMain))
+        addMenuItem("Show Mission Mode", to: menu, action: #selector(statusSummon))
+        pauseMenuItem = addMenuItem("Pause Capture", to: menu, action: #selector(statusTogglePause))
+        sessionMenuItem = addMenuItem("Stop Session", to: menu, action: #selector(statusToggleSession))
+        addMenuItem("Start New Session", to: menu, action: #selector(statusStartNewSession))
+        muteMenuItem = addMenuItem("Mute Microphone", to: menu, action: #selector(statusToggleMute))
+        notesMenuItem = addMenuItem("Start Note-Taking", to: menu, action: #selector(statusToggleNoteTaking))
+        menu.addItem(.separator())
+        addMenuItem("Quit Mai", to: menu, action: #selector(statusQuit))
+
+        item.menu = menu
+        updateStatusMenu()
+    }
+
+    @discardableResult
+    private func addMenuItem(_ title: String, to menu: NSMenu, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return item
+    }
+
+    private func updateStatusMenu() {
+        statusLineMenuItem?.title = statusMenuTitle
+        sessionLineMenuItem?.title = model.sessionLabel
+        pauseMenuItem?.title = model.isPaused ? "Resume Capture" : "Pause Capture"
+        sessionMenuItem?.title = model.sessionActive ? "Stop Session" : "Start Session"
+        muteMenuItem?.title = model.micMuted ? "Unmute Microphone" : "Mute Microphone"
+        notesMenuItem?.title = model.noteTaking ? "Stop Note-Taking" : "Start Note-Taking"
+        statusItem?.button?.toolTip = "Mai - \(statusMenuTitle)"
+    }
+
+    private var statusMenuTitle: String {
+        switch model.captureState {
+        case .capturing:
+            return "Listening"
+        case .paused:
+            return "Paused"
+        case .simulated:
+            return "Simulated input"
+        case .starting:
+            return "Starting..."
+        case .unavailable(let reason):
+            return reason.isEmpty ? "Capture unavailable" : "Capture unavailable: \(reason)"
+        }
+    }
+
+    @objc private func statusOpenMain() {
+        openMain()
+    }
+
+    @objc private func statusSummon() {
+        summon()
+        updateStatusMenu()
+    }
+
+    @objc private func statusTogglePause() {
+        model.togglePause()
+        updateStatusMenu()
+    }
+
+    @objc private func statusToggleSession() {
+        if model.sessionActive {
+            model.stopCurrentSession()
+        } else {
+            model.startNewSession()
+        }
+        updateStatusMenu()
+    }
+
+    @objc private func statusStartNewSession() {
+        model.startNewSession()
+        updateStatusMenu()
+    }
+
+    @objc private func statusToggleMute() {
+        model.toggleMute()
+        updateStatusMenu()
+    }
+
+    @objc private func statusToggleNoteTaking() {
+        model.toggleNoteTaking()
+        updateStatusMenu()
+    }
+
+    @objc private func statusQuit() {
+        NSApplication.shared.terminate(nil)
     }
 
     func summon() {
@@ -180,12 +251,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hud?.hide()
         NSApp.activate()
         mainWindow?.makeKeyAndOrderFront(nil)
+        updateStatusMenu()
     }
 
     func windowWillClose(_ notification: Notification) {
         guard (notification.object as? NSWindow) === mainWindow else { return }
         model.appWindowOpen = false
         NSApp.setActivationPolicy(.accessory)   // revert to the resting menu bar agent + HUD
+        updateStatusMenu()
     }
 
     // Launched via `open Mai.app`, the working directory is "/", so relative paths
