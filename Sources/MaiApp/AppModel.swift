@@ -70,6 +70,7 @@ final class AppModel: ObservableObject {
     @Published var lastSavedMeeting: MeetingExport?
     @Published var spend = SpendEstimate(transcription: 0, vision: 0, model: 0, search: 0, total: 0)
     @Published var missionPinned = false
+    @Published private(set) var missionHiddenByUser = false
     @Published var appWindowOpen = false
     @Published var notesFolder: URL?
     @Published var onboardingComplete: Bool
@@ -1246,12 +1247,29 @@ final class AppModel: ObservableObject {
 
     // MARK: - Modes (Mission HUD vs the full app) and the summon hotkey
 
-    func summonMission() { summonedAt = Date(); objectWillChange.send() }
-    func togglePinned() { missionPinned.toggle() }
+    func summonMission() {
+        missionHiddenByUser = false
+        summonedAt = Date()
+        objectWillChange.send()
+    }
+
+    func hideMission() {
+        missionHiddenByUser = true
+        missionPinned = false
+        summonedAt = .distantPast
+        if chatOpen { closeChat() }
+        objectWillChange.send()
+    }
+
+    func togglePinned() {
+        missionPinned.toggle()
+        if missionPinned { missionHiddenByUser = false }
+    }
 
     // The pure HUD show/hide decision, evaluated from current app state. The AppDelegate
     // polls this to slide the panel in and out.
     var shouldShowHUD: Bool {
+        guard !missionHiddenByUser else { return false }
         let hasCards = richItems.contains { !$0.suppressed && Date().timeIntervalSince($0.timestamp) < 30 }
         let summoned = chatOpen || Date().timeIntervalSince(summonedAt) < 8
         return HUDActivity.shouldShow(HUDActivityInput(

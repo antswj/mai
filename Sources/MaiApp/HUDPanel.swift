@@ -44,9 +44,9 @@ final class MissionHUDController {
     // (no jumping); the SwiftUI content fills it and splits the space internally.
     private let panelWidth: CGFloat = 400
 
-    init(model: AppModel) {
+    init(model: AppModel, onHideRequest: @escaping () -> Void) {
         self.model = model
-        hosting = NSHostingView(rootView: AnyView(MissionHUDView(model: model)))
+        hosting = NSHostingView(rootView: AnyView(MissionHUDView(model: model, onHideRequest: onHideRequest)))
         // Fill the panel: AppKit keeps the content view sized to the panel, and the
         // SwiftUI root uses maxWidth/maxHeight .infinity, so the content always matches
         // the panel size exactly (no clipping, no fitting-size polling).

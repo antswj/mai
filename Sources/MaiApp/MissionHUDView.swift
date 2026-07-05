@@ -10,6 +10,7 @@ import MaiCore
 // history.
 struct MissionHUDView: View {
     @ObservedObject var model: AppModel
+    var onHideRequest: () -> Void = {}
     @State private var showAsk = false
 
     private var presence: LivingGlow.Presence {
@@ -102,6 +103,13 @@ struct MissionHUDView: View {
                 }
                 .buttonStyle(SpatialIconButtonStyle(active: model.isPaused))
                 .accessibilityLabel(model.isPaused ? "Resume" : "Pause")
+                Button { onHideRequest() } label: {
+                    Image(systemName: "eye.slash")
+                        .foregroundStyle(Color.secondary)
+                }
+                .buttonStyle(SpatialIconButtonStyle(active: false))
+                .help("Hide Mission Mode")
+                .accessibilityLabel("Hide Mission Mode")
             }
             .padding(3)
             .spatialPanel(in: Capsule(), shadowOpacity: 0.08)

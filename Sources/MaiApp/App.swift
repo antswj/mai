@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private weak var statusLineMenuItem: NSMenuItem?
     private weak var sessionLineMenuItem: NSMenuItem?
+    private weak var missionMenuItem: NSMenuItem?
     private weak var pauseMenuItem: NSMenuItem?
     private weak var sessionMenuItem: NSMenuItem?
     private weak var muteMenuItem: NSMenuItem?
@@ -57,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)   // resting state: a menu bar agent
 
-        hud = MissionHUDController(model: model)
+        hud = MissionHUDController(model: model, onHideRequest: { [weak self] in
+            self?.hideMissionMode()
+        })
         installStatusItem()
 
         // Global summon hotkey (user sets it in Settings; no default is shipped).
@@ -141,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(.separator())
         addMenuItem("Open Mai", to: menu, action: #selector(statusOpenMain))
-        addMenuItem("Show Mission Mode", to: menu, action: #selector(statusSummon))
+        missionMenuItem = addMenuItem("Show Mission Mode", to: menu, action: #selector(statusToggleMissionMode))
         pauseMenuItem = addMenuItem("Pause Capture", to: menu, action: #selector(statusTogglePause))
         sessionMenuItem = addMenuItem("Stop Session", to: menu, action: #selector(statusToggleSession))
         addMenuItem("Start New Session", to: menu, action: #selector(statusStartNewSession))
@@ -165,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func updateStatusMenu() {
         statusLineMenuItem?.title = statusMenuTitle
         sessionLineMenuItem?.title = model.sessionLabel
+        missionMenuItem?.title = hud?.isVisible == true ? "Hide Mission Mode" : "Show Mission Mode"
         pauseMenuItem?.title = model.isPaused ? "Resume Capture" : "Pause Capture"
         sessionMenuItem?.title = model.sessionActive ? "Stop Session" : "Start Session"
         muteMenuItem?.title = model.micMuted ? "Unmute Microphone" : "Mute Microphone"
@@ -191,8 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         openMain()
     }
 
-    @objc private func statusSummon() {
-        summon()
+    @objc private func statusToggleMissionMode() {
+        if hud?.isVisible == true {
+            hideMissionMode()
+        } else {
+            summon()
+        }
         updateStatusMenu()
     }
 
@@ -232,6 +240,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func summon() {
         model.summonMission()
         hud?.summon()
+        updateStatusMenu()
+    }
+
+    func hideMissionMode() {
+        model.hideMission()
+        hud?.hide()
+        updateStatusMenu()
     }
 
     func openMain() {
