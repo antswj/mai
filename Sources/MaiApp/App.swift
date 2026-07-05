@@ -135,7 +135,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             MainActor.assumeIsolated { self?.tickHUD() }
         }
 
-        if !model.onboardingComplete { openMain() }   // first run: walk through setup
+        // Opening Mai.app should always produce a visible affordance. After onboarding
+        // the app can still rest as a menu bar agent when the window is closed, but a
+        // fresh launch or Finder reopen should not look like "nothing happened".
+        openMain()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openMain()
+        return true
     }
 
     private func tickHUD() {
