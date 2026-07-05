@@ -51,6 +51,10 @@ public struct CardTelemetry: Identifiable, Sendable, Equatable {
             return sourceProvider(card) ?? (card.unverified ? "LLM fallback" : "Grounded Web")
         case .screen:
             return sourceProvider(card) ?? "Screen"
+        case .coaching:
+            return "Local Coach"
+        case .sessionOperator:
+            return "Local Operator"
         case .pending:
             return "Pending"
         }

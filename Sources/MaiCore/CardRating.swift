@@ -64,6 +64,15 @@ public struct CardRating: Sendable, Equatable {
             if card.unverified { reasons.append("unverified") }
         case .screen:
             if !info.isEmpty { score += 0.04 }
+        case .coaching:
+            if !info.isEmpty { score += 0.14; reasons.append("coachable moment") }
+            if !card.trust.isEmpty { score += 0.05; reasons.append("explainable") }
+        case .sessionOperator:
+            if !info.isEmpty { score += 0.18; reasons.append("session wrap-up") }
+            if info.localizedCaseInsensitiveContains("follow") || info.localizedCaseInsensitiveContains("next step") {
+                score += 0.06
+                reasons.append("next actions")
+            }
         case .pending:
             break
         }

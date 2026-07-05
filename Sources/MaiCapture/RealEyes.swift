@@ -43,8 +43,11 @@ public final class RealEyes: Eyes, @unchecked Sendable {
     public var currentRoster: [String] { lock.withLock { roster } }
 
     // Called by the screen-watch path on each settled read.
-    func emit(content: String, subject: String? = nil, at: Date = Date()) {
-        let event = ScreenContentEvent(content: content, timestamp: at, isChange: true, subject: subject)
+    func emit(content: String, subject: String? = nil, appContext: ScreenAppContext? = nil, at: Date = Date()) {
+        let event = ScreenContentEvent(content: content, timestamp: at, isChange: true, subject: subject,
+                                       appName: appContext?.appName,
+                                       bundleIdentifier: appContext?.bundleIdentifier,
+                                       windowTitle: appContext?.windowTitle)
         lock.withLock { latest = event }
         cont.yield(event)
     }

@@ -36,8 +36,16 @@ public struct ScreenContentEvent: Codable, Sendable {
     // contract stays source-compatible. Used to drive a useful sourced screen card
     // (run through the lookup router) instead of a description of the slide.
     public let subject: String?
-    public init(content: String, timestamp: Date, isChange: Bool, subject: String? = nil) {
+    // App-aware screen context. These come from local macOS window/app metadata and
+    // let Mai reason differently about a browser, code editor, CRM, terminal, or doc
+    // without relying only on pixels.
+    public let appName: String?
+    public let bundleIdentifier: String?
+    public let windowTitle: String?
+    public init(content: String, timestamp: Date, isChange: Bool, subject: String? = nil,
+                appName: String? = nil, bundleIdentifier: String? = nil, windowTitle: String? = nil) {
         self.content = content; self.timestamp = timestamp; self.isChange = isChange; self.subject = subject
+        self.appName = appName; self.bundleIdentifier = bundleIdentifier; self.windowTitle = windowTitle
     }
 }
 

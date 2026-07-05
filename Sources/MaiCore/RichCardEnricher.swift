@@ -108,6 +108,7 @@ public actor RichCardEnricher {
             card.route = plan.route
             card.timings["route"] = ms(t0)
             card.pending = pendingForKnowledge(plan: plan, respond: respond)
+            card.trust.append(TrustSignal(label: "Route", detail: "\(plan.route.rawValue) for \(plan.query)", confidence: 0.76))
             rate(&card, final: false)
             emit(card)
 

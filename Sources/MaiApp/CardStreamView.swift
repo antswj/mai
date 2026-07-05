@@ -226,6 +226,8 @@ struct RichCardRow<Controls: View>: View {
                 if let why = card.note, card.suppressed { Text("suppressed: \(why)").italic() }
             }
             .font(.caption2).foregroundStyle(.secondary)
+
+            TrustDetailsView(card: card)
         }
         .padding(10)
         .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous),
@@ -235,6 +237,61 @@ struct RichCardRow<Controls: View>: View {
 
     private var tierColor: Color {
         switch card.tier { case .critical: return .red; case .medium: return .blue; case .noise: return .gray }
+    }
+}
+
+struct TrustDetailsView: View {
+    let card: RichCard
+    @State private var expanded = false
+
+    var body: some View {
+        let signals = visibleSignals
+        if !signals.isEmpty {
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(signals) { signal in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "checkmark.seal")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 6) {
+                                    Text(signal.label).font(.caption2.weight(.semibold))
+                                    Text(String(format: "%.0f%%", signal.confidence * 100))
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Text(signal.detail)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    if let rating = card.rating {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("Quality \(rating.grade) \(String(format: "%.2f", rating.score)): \(rating.reasons.prefix(4).joined(separator: ", "))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            } label: {
+                Label("Why", systemImage: "info.circle")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .disclosureGroupStyle(.automatic)
+        }
+    }
+
+    private var visibleSignals: [TrustSignal] {
+        Array(card.trust.prefix(5))
     }
 }
 

@@ -243,6 +243,7 @@ struct MiniCard: View {
                     Text("quality \(rating.grade) \(String(format: "%.2f", rating.score))")
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
+                TrustDetailsView(card: card)
                 if let action = card.action, let urlStr = action.params["url"], let url = URL(string: urlStr) {
                     Button(action.label) { NSWorkspace.shared.open(url) }.buttonStyle(.borderedProminent).controlSize(.small)
                 }

@@ -12,14 +12,22 @@ public struct MaiTraceEvent: Codable, Sendable, Equatable {
     public let language: String?
     public let text: String
     public let subject: String?
+    public let appName: String?
+    public let bundleIdentifier: String?
+    public let windowTitle: String?
 
-    public init(kind: MaiTraceEventKind, offsetMs: Int, speaker: String?, language: String?, text: String, subject: String? = nil) {
+    public init(kind: MaiTraceEventKind, offsetMs: Int, speaker: String?, language: String?,
+                text: String, subject: String? = nil, appName: String? = nil,
+                bundleIdentifier: String? = nil, windowTitle: String? = nil) {
         self.kind = kind
         self.offsetMs = offsetMs
         self.speaker = speaker
         self.language = language
         self.text = text
         self.subject = subject
+        self.appName = appName
+        self.bundleIdentifier = bundleIdentifier
+        self.windowTitle = windowTitle
     }
 }
 
@@ -42,7 +50,10 @@ public struct MaiTrace: Codable, Sendable, Equatable {
                                                timestamp: timestamp, isFinal: true, language: event.language))
         case .screen:
             return .screen(ScreenContentEvent(content: event.text, timestamp: timestamp,
-                                              isChange: true, subject: event.subject))
+                                              isChange: true, subject: event.subject,
+                                              appName: event.appName,
+                                              bundleIdentifier: event.bundleIdentifier,
+                                              windowTitle: event.windowTitle))
         }
     }
 
@@ -200,7 +211,10 @@ public enum TraceAnonymizer {
         return MaiTraceEvent(kind: .screen, offsetMs: offset,
                              speaker: nil, language: nil,
                              text: sanitizedScreen(event.content, subject: sanitizedSubject),
-                             subject: sanitizedSubject)
+                             subject: sanitizedSubject,
+                             appName: sanitizedAppName(event.appName, bundleIdentifier: event.bundleIdentifier),
+                             bundleIdentifier: sanitizedBundleIdentifier(event.bundleIdentifier),
+                             windowTitle: sanitizedWindowTitle(event.windowTitle, appName: event.appName))
     }
 
     public static func sanitizedTranscript(_ text: String) -> String {
@@ -241,6 +255,37 @@ public enum TraceAnonymizer {
         if low.contains("revenue") { return "Q3 Revenue Overview" }
         if subject.contains("寿司") || low.contains("sushi") { return "Sushi" }
         return "Synthetic Topic"
+    }
+
+    public static func sanitizedAppName(_ appName: String?, bundleIdentifier: String?) -> String? {
+        let haystack = "\(appName ?? "") \(bundleIdentifier ?? "")".lowercased()
+        if haystack.contains("xcode") || haystack.contains("visual studio") || haystack.contains("code") { return "Code Editor" }
+        if haystack.contains("safari") || haystack.contains("chrome") || haystack.contains("firefox") { return "Browser" }
+        if haystack.contains("salesforce") { return "CRM" }
+        if haystack.contains("terminal") || haystack.contains("iterm") { return "Terminal" }
+        if haystack.contains("slack") || haystack.contains("teams") || haystack.contains("zoom") { return "Meeting or Chat" }
+        if appName?.isEmpty == false { return "App" }
+        return nil
+    }
+
+    public static func sanitizedBundleIdentifier(_ bundleIdentifier: String?) -> String? {
+        guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return nil }
+        let low = bundleIdentifier.lowercased()
+        if low.contains("xcode") || low.contains("code") { return "dev.code-editor" }
+        if low.contains("safari") || low.contains("chrome") || low.contains("firefox") { return "web.browser" }
+        if low.contains("terminal") || low.contains("iterm") { return "dev.terminal" }
+        if low.contains("slack") || low.contains("teams") || low.contains("zoom") { return "meeting.chat" }
+        return "app.redacted"
+    }
+
+    public static func sanitizedWindowTitle(_ windowTitle: String?, appName: String?) -> String? {
+        guard let windowTitle, !windowTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let low = "\(windowTitle) \(appName ?? "")".lowercased()
+        if low.contains(".swift") { return "Swift source file" }
+        if low.contains("salesforce") { return "Salesforce workspace" }
+        if low.contains("calendar") { return "Calendar window" }
+        if low.contains("terminal") { return "Terminal window" }
+        return "Window title redacted"
     }
 
     private static func anonymizedSpeaker(_ speaker: String?) -> String? {

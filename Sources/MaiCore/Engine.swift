@@ -61,6 +61,10 @@ public actor Engine {
     // a static screen is never re-read, the stored value is reused.
     private var currentScreenText: String = ""
     private var currentScreenSubject: String?   // the salient subject to look up
+    private var currentScreenAppName: String?
+    private var currentScreenBundleIdentifier: String?
+    private var currentScreenWindowTitle: String?
+    private var recentCoaching: [String: Date] = [:]
 
     public var sessionId: String { session.id }
 
@@ -135,6 +139,7 @@ public actor Engine {
         context.append(event)
         save(record(kind: "transcript", content: event.text, language: nil, speaker: event.speaker, at: event.timestamp))
         verbatim.appendTranscript(event, sessionId: session.id)
+        maybeSurfaceCoaching(event: event, window: context.window(maxChars: 2_000), t0: t0)
 
         // Bound the classifier call so a hung LLM request can never freeze the
         // always-on loop (a freeze here would stop every card until it unblocked).
@@ -184,13 +189,14 @@ public actor Engine {
         // explicitly asked to see the screen).
         if trigger.type == .screenReference {
             if let subject = currentScreenSubject, !subject.isEmpty {
-                surfaceScreenCard(subject: subject, content: currentScreenText, now: event.timestamp,
+                surfaceScreenCard(subject: subject, content: currentScreenContext(), now: event.timestamp,
                                   tier: pre.tier, score: pre.score, latencyMs: latencyMs, enricher: enricher)
             } else {
                 var card = RichCard(trigger: .screenReference, timestamp: event.timestamp, route: .screen,
                                     tier: pre.tier, score: pre.score, headline: headline,
-                                    info: currentScreenText.trimmingCharacters(in: .whitespacesAndNewlines),
-                                    latencyMs: latencyMs)
+                                    info: currentScreenContext().trimmingCharacters(in: .whitespacesAndNewlines),
+                                    latencyMs: latencyMs,
+                                    trust: screenTrust(subject: nil, triggerReason: trigger.reason))
                 card.pending = []
                 card.rating = CardRating.evaluate(card)
                 if card.rating?.useful == false {
@@ -230,7 +236,8 @@ public actor Engine {
 
         let skeleton = RichCard(trigger: trigger.type, timestamp: event.timestamp, route: route,
                                 tier: pre.tier, score: pre.score, headline: headline,
-                                pending: pending, latencyMs: latencyMs)
+                                pending: pending, latencyMs: latencyMs,
+                                trust: triggerTrust(trigger: trigger, event: event))
         richSink?.upsert(skeleton)   // instant first paint, before any lookup
 
         // Supersede on the SPECIFIC trigger content (same key as the grouping dedup),
@@ -268,6 +275,9 @@ public actor Engine {
         if let rating = card.rating {
             meta["rating"] = String(format: "%.2f", rating.score)
             meta["ratingGrade"] = rating.grade
+        }
+        if !card.trust.isEmpty {
+            meta["trust"] = card.trust.prefix(4).map { "\($0.label): \($0.detail)" }.joined(separator: " | ")
         }
         save(record(kind: "card", content: cardSummaryLine(c), language: config.interfaceLanguage.rawValue,
                     speaker: nil, at: c.timestamp, meta: meta))
@@ -313,7 +323,11 @@ public actor Engine {
         guard event.isChange else { return }
         currentScreenText = event.content
         currentScreenSubject = event.subject
-        save(record(kind: "screen", content: event.content, language: nil, speaker: nil, at: event.timestamp))
+        currentScreenAppName = event.appName
+        currentScreenBundleIdentifier = event.bundleIdentifier
+        currentScreenWindowTitle = event.windowTitle
+        save(record(kind: "screen", content: event.content, language: nil, speaker: nil, at: event.timestamp,
+                    meta: screenMeta(event)))
         verbatim.appendScreen(event, sessionId: session.id)
 
         // Rich path: a settled screen change proactively surfaces a USEFUL, sourced card
@@ -323,7 +337,7 @@ public actor Engine {
         // double-fire. Paused while the chat is open (it is an info card).
         guard let enricher = richEnricher, !chatOpen,
               let subject = event.subject, !subject.isEmpty else { return }
-        surfaceScreenCard(subject: subject, content: event.content, now: event.timestamp,
+        surfaceScreenCard(subject: subject, content: currentScreenContext(), now: event.timestamp,
                           tier: .medium, score: 0.75, latencyMs: 0, enricher: enricher)
     }
 
@@ -342,7 +356,8 @@ public actor Engine {
         }
         let skeleton = RichCard(trigger: .screenReference, timestamp: now, route: .pending,
                                 tier: pre.tier, score: pre.score, headline: subject,
-                                pending: [RichCard.Part.route.rawValue], latencyMs: latencyMs)
+                                pending: [RichCard.Part.route.rawValue], latencyMs: latencyMs,
+                                trust: screenTrust(subject: subject, triggerReason: trig.reason))
         richSink?.upsert(skeleton)
         // Look the subject up like any knowledge query; the screen text is the context.
         // Interface language drives the answer; native subject names resolve cross-language.
@@ -355,6 +370,21 @@ public actor Engine {
                 Task { await self.persistRich(final) }
             }
         }
+    }
+
+    private func maybeSurfaceCoaching(event: TranscriptEvent, window: String, t0: Date) {
+        guard richSink != nil, !chatOpen else { return }
+        guard let insight = ConversationCoach.insight(for: event, window: window) else { return }
+        if let last = recentCoaching[insight.key], event.timestamp.timeIntervalSince(last) < 90 { return }
+        recentCoaching[insight.key] = event.timestamp
+        var card = RichCard(trigger: .intent, timestamp: event.timestamp, route: .coaching,
+                            tier: insight.tier, score: insight.score, headline: insight.headline,
+                            info: insight.info, pending: [],
+                            latencyMs: Int(Date().timeIntervalSince(t0) * 1000),
+                            trust: insight.trust)
+        card.rating = CardRating.evaluate(card)
+        richSink?.upsert(card)
+        persistRich(card)
     }
 
     // MARK: - Notes & summary
@@ -394,6 +424,50 @@ public actor Engine {
         if let a = c.action { m["action"] = a.kind; m["actionUrl"] = a.params["url"] ?? "" }
         return m
     }
+
+    private func screenMeta(_ event: ScreenContentEvent) -> [String: String] {
+        var meta: [String: String] = [:]
+        if let subject = event.subject, !subject.isEmpty { meta["subject"] = subject }
+        if let appName = event.appName, !appName.isEmpty { meta["appName"] = appName }
+        if let bundle = event.bundleIdentifier, !bundle.isEmpty { meta["bundleIdentifier"] = bundle }
+        if let title = event.windowTitle, !title.isEmpty { meta["windowTitle"] = title }
+        return meta
+    }
+
+    private func currentScreenContext() -> String {
+        var parts: [String] = []
+        if let app = currentScreenAppName, !app.isEmpty { parts.append("Active app: \(app)") }
+        if let title = currentScreenWindowTitle, !title.isEmpty { parts.append("Window: \(title)") }
+        if let bundle = currentScreenBundleIdentifier, !bundle.isEmpty { parts.append("Bundle: \(bundle)") }
+        let text = currentScreenText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { parts.append("Screen read: \(text)") }
+        return parts.joined(separator: "\n")
+    }
+
+    private func triggerTrust(trigger: Trigger, event: TranscriptEvent) -> [TrustSignal] {
+        var trust = [
+            TrustSignal(label: "Trigger", detail: "\(trigger.type.rawValue): \(trigger.reason)", confidence: trigger.confidence),
+            TrustSignal(label: "Evidence", detail: Self.clippedTrustText(event.text), confidence: min(0.95, max(0.45, trigger.confidence)))
+        ]
+        if let speaker = event.speaker, !speaker.isEmpty {
+            trust.append(TrustSignal(label: "Speaker", detail: speaker, confidence: 0.82))
+        }
+        return trust
+    }
+
+    private func screenTrust(subject: String?, triggerReason: String) -> [TrustSignal] {
+        var trust = [TrustSignal(label: "Trigger", detail: triggerReason, confidence: 0.78)]
+        if let subject, !subject.isEmpty {
+            trust.append(TrustSignal(label: "Screen subject", detail: subject, confidence: 0.76))
+        }
+        if let app = currentScreenAppName, !app.isEmpty {
+            trust.append(TrustSignal(label: "Active app", detail: app, confidence: 0.86))
+        }
+        if let title = currentScreenWindowTitle, !title.isEmpty {
+            trust.append(TrustSignal(label: "Window", detail: Self.clippedTrustText(title), confidence: 0.72))
+        }
+        return trust
+    }
     private func withLatency(_ c: Card, ms: Int) -> Card {
         Card(title: c.title, body: c.body, trigger: c.trigger, tier: c.tier, score: c.score,
              timestamp: c.timestamp, action: c.action, latencyMs: ms)
@@ -406,6 +480,12 @@ public actor Engine {
         let budget = max(0, maxChars - prefix.count)
         guard budget > 0 else { return String(prefix.prefix(maxChars)) }
         return prefix + String(text.suffix(budget))
+    }
+
+    private static func clippedTrustText(_ text: String, maxChars: Int = 140) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxChars else { return trimmed }
+        return String(trimmed.prefix(maxChars)).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 }
 

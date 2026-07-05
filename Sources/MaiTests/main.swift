@@ -407,6 +407,41 @@ do {
           "engineering screens about Mai remain readable")
 }
 
+section("App-aware screen traces keep useful app metadata without private titles")
+do {
+    let event = ScreenContentEvent(content: "Salesforce opportunity page with renewal risk.",
+                                   timestamp: Date(), isChange: true, subject: "Renewal risk",
+                                   appName: "Safari", bundleIdentifier: "com.apple.Safari",
+                                   windowTitle: "Acme Renewal - Private CRM")
+    let trace = TraceAnonymizer.screen(event, sessionStartedAt: event.timestamp)
+    check(trace.appName == "Browser", "screen trace stores an app category")
+    check(trace.bundleIdentifier == "web.browser", "bundle id is anonymized")
+    check(trace.windowTitle == "Window title redacted", "private window title is redacted")
+}
+
+section("Live coaching: concern cues surface locally without claiming deception")
+do {
+    let insight = ConversationCoach.insight(
+        for: TranscriptEvent(text: "I'm worried the timeline risk is still too high.",
+                             speaker: "Mia", timestamp: Date(), isFinal: true),
+        window: "Mia: I'm worried the timeline risk is still too high.")
+    check(insight?.headline == "Address the concern", "concern cue produces a coaching insight")
+    check(insight?.trust.contains { $0.detail.localizedCaseInsensitiveContains("not deception") } == true,
+          "coaching explicitly avoids lie/deception claims")
+}
+
+section("End-of-session operator: produces next-action checklist")
+do {
+    let lines = [
+        MeetingLine(speaker: "Mia", isUser: false, text: "We should follow up with Ken by Friday.", timestamp: Date()),
+        MeetingLine(speaker: "Lee", isUser: true, text: "What is still blocking the rollout?", timestamp: Date())
+    ]
+    let card = ConversationCoach.operatorChecklist(lines: lines, cards: [], savedTitle: "Team Sync Notes")
+    check(card?.route == .sessionOperator, "operator card route is sessionOperator")
+    check(card?.info?.localizedCaseInsensitiveContains("follow") == true, "operator card includes follow-up guidance")
+    check(card?.trust.isEmpty == false, "operator card carries trust signals")
+}
+
 // ============================ Step 3: card intelligence ============================
 
 final class CollectingRichSink: RichCardSink, @unchecked Sendable {
@@ -851,7 +886,10 @@ do {
     await rig.engine.process(tline("The rollout risk feels material, but this phrasing is deliberately outside the local fast path.", "Mia"))
     let elapsed = Date().timeIntervalSince(start)
     check(elapsed < 0.9, "classifier timeout follows the hard cap instead of waiting on a slow model")
-    check(rig.sink.all.filter { !$0.suppressed }.isEmpty, "a late model-only trigger is dropped rather than surfacing stale")
+    check(rig.sink.all.contains { $0.route == .coaching && !$0.suppressed },
+          "local coaching can still surface while a slow model classifier is cut off")
+    check(!rig.sink.all.contains { $0.headline == "rollout risk" && $0.route != .coaching && !$0.suppressed },
+          "a late model-only trigger is dropped rather than surfacing stale")
 }
 
 section("Hell scenario: noisy multilingual meeting stays fast, useful, and proactive")

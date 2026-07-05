@@ -447,12 +447,14 @@ final class AppModel: ObservableObject {
 
     func stopCurrentSession() {
         guard sessionActive else { return }
-        if noteTaking { stopNoteTaking() }
+        let wasNoteTaking = noteTaking
+        if wasNoteTaking { stopNoteTaking() }
         stopSession()
         sessionActive = false
         sessionEndedAt = Date()
         captureState = .paused
         status = "Session stopped. Start a new session when you're ready."
+        if !wasNoteTaking { surfaceSessionOperator(savedTitle: nil) }
     }
 
     func startNewSession() {
@@ -504,6 +506,13 @@ final class AppModel: ObservableObject {
         }
         // Keep a pinned copy fresh as its enrichment lands (it lives outside richItems).
         if let pidx = pinnedCards.firstIndex(where: { $0.id == card.id }) { pinnedCards[pidx] = card }
+    }
+
+    private func surfaceSessionOperator(savedTitle: String?) {
+        guard let card = ConversationCoach.operatorChecklist(lines: meetingTranscript(),
+                                                             cards: richItems + pinnedCards,
+                                                             savedTitle: savedTitle) else { return }
+        upsertRich(card)
     }
 
     private func applyingFeedbackThreshold(to incoming: RichCard) -> RichCard {
@@ -1069,8 +1078,10 @@ final class AppModel: ObservableObject {
                             : "Saved meeting: \(export.title)"
                     }
                     self.onMeetingFinished?(export)   // phase B: a meeting just finished
+                    self.surfaceSessionOperator(savedTitle: export.title)
                 } else {
                     self.status = "Nothing to save (no transcript was captured)."
+                    self.surfaceSessionOperator(savedTitle: nil)
                 }
             }
         }

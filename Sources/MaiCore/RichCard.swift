@@ -24,6 +24,8 @@ public enum LookupRoute: String, Codable, Sendable {
     case place          // nearby places (deterministic lookup)
     case preparedReply  // meeting-mode prepared line / suggested response
     case screen         // surface the current screen read
+    case coaching       // live conversation coaching from observable context
+    case sessionOperator // end-of-session wrap-up and next-action checklist
     case pending        // not yet routed (skeleton state, before the router call returns)
 }
 
@@ -45,6 +47,22 @@ public struct RichResponse: Codable, Sendable, Equatable {
     public let rationale: String?    // a short why, in the interface language
     public init(spoken: String, translation: String, language: Language, rationale: String?) {
         self.spoken = spoken; self.translation = translation; self.language = language; self.rationale = rationale
+    }
+}
+
+// Why Mai showed a card. Trust signals are deliberately small, local, and explainable:
+// a trigger, an observed app/window, a rating reason, or a safety caveat. They are not
+// private prompt dumps, and they are not hidden model thoughts.
+public struct TrustSignal: Codable, Sendable, Equatable, Identifiable {
+    public var id: String { "\(label)|\(detail)|\(String(format: "%.2f", confidence))" }
+    public let label: String
+    public let detail: String
+    public let confidence: Double
+
+    public init(label: String, detail: String, confidence: Double) {
+        self.label = label
+        self.detail = detail
+        self.confidence = max(0, min(1, confidence))
     }
 }
 
@@ -78,6 +96,7 @@ public struct RichCard: Sendable, Identifiable, Equatable {
     public var note: String?                 // small caption (e.g. "Suggested reply for Sato")
     public var unverified: Bool              // model fallback (no source found); shown labeled
     public var rating: CardRating?           // resolved-card usefulness score, local and no-cost
+    public var trust: [TrustSignal]          // visible reasons/evidence behind surfacing
 
     public init(
         id: String = UUID().uuidString,
@@ -100,7 +119,8 @@ public struct RichCard: Sendable, Identifiable, Equatable {
         suppressed: Bool = false,
         note: String? = nil,
         unverified: Bool = false,
-        rating: CardRating? = nil
+        rating: CardRating? = nil,
+        trust: [TrustSignal] = []
     ) {
         self.id = id; self.trigger = trigger; self.timestamp = timestamp
         self.route = route; self.tier = tier; self.score = score
@@ -110,6 +130,7 @@ public struct RichCard: Sendable, Identifiable, Equatable {
         self.pending = pending; self.timings = timings; self.latencyMs = latencyMs
         self.suppressed = suppressed; self.note = note; self.unverified = unverified
         self.rating = rating
+        self.trust = trust
     }
 
     public var isLoading: Bool { !pending.isEmpty }

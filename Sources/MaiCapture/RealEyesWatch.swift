@@ -18,17 +18,20 @@ extension RealEyes {
         guard let key = secrets.get("GEMINI_API_KEY") else { return }
         let model = config.screenModel
         let generation = nextReadGeneration()
+        let appContext = ScreenAppContext.current()
         Task { [weak self] in
             guard let self else { return }
             let gemini = GeminiVision(apiKey: key, model: model)
             do {
                 if let usage = self.usage { await usage.recordVision() }
                 let text = try await gemini.read(imageData: jpeg, mimeType: "image/jpeg",
-                                                 prompt: Self.screenReadPrompt)
+                                                 prompt: Self.screenReadPrompt(appContext: appContext))
                 guard self.isCurrentReadGeneration(generation) else { return }
                 let parsed = Self.parseScreenRead(text)
                 self.updateNaming(roster: parsed.roster, highlighted: parsed.highlighted)
-                if !parsed.content.isEmpty { self.emit(content: parsed.content, subject: parsed.subject) }
+                if !parsed.content.isEmpty {
+                    self.emit(content: parsed.content, subject: parsed.subject, appContext: appContext)
+                }
             } catch {
                 // A failed read leaves the last stored screen in place; no card fires.
             }
@@ -52,6 +55,17 @@ extension RealEyes {
       capture. Describe the underlying app or shared screen instead. If only Mai is
       visible, return empty "content" and "subject".
     """
+
+    static func screenReadPrompt(appContext: ScreenAppContext) -> String {
+        guard !appContext.isEmpty else { return screenReadPrompt }
+        return screenReadPrompt + """
+
+        Local macOS context (use as a hint, not as a fact source): \(appContext.promptLine)
+        - If the active app is a browser, code editor, terminal, CRM, calendar, document,
+          or chat app, reflect that in "content" when useful.
+        - Prefer the actual visible content over the app name if they conflict.
+        """
+    }
 
     public static func parseScreenRead(_ text: String) -> (content: String, subject: String?, roster: [String], highlighted: String?) {
         guard let obj = firstJSONObject(text) else {
