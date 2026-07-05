@@ -91,6 +91,7 @@ public struct StubLLM: LLMProvider {
             "headline": "Adjust the pace",
             "info": "The vocal pattern suggests this is a good moment to slow down and check alignment before moving on.",
             "recommended_move": "Ask one clarifying question and pause for the answer.",
+            "framework": "Motivational Interviewing OARS + active listening",
             "tier": "medium",
             "score": 0.76,
             "observed_voice_cues": ["pause/energy pattern changed", "pace may be compressed"]

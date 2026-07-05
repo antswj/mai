@@ -8,7 +8,7 @@ import MaiCore
 extension RealEars {
     func startCapture() async throws {
         guard let key = secrets.get("SONIOX_API_KEY") else { throw CaptureError.missingKey("SONIOX_API_KEY") }
-        let cfg = config
+        let cfg = config.audioFocusAdjusted
         let translationTarget = cfg.sttTranslation ? cfg.interfaceLanguage.rawValue : nil
 
         let micConfig = SonioxConfig.json(

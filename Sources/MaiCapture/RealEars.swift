@@ -66,10 +66,11 @@ public final class RealEars: Ears, @unchecked Sendable {
     public init(config: Config, secrets: Secrets) {
         self.config = config
         self.secrets = secrets
-        self.micVocal = VocalSignalTracker(source: .user, sampleRate: config.sttSampleRate,
-                                           speechRMSThreshold: config.echoSystemActiveRMS)
-        self.systemVocal = VocalSignalTracker(source: .remote, sampleRate: config.sttSampleRate,
-                                              speechRMSThreshold: config.echoSystemActiveRMS)
+        let audioConfig = config.audioFocusAdjusted
+        self.micVocal = VocalSignalTracker(source: .user, sampleRate: audioConfig.sttSampleRate,
+                                           speechRMSThreshold: audioConfig.echoSystemActiveRMS)
+        self.systemVocal = VocalSignalTracker(source: .remote, sampleRate: audioConfig.sttSampleRate,
+                                              speechRMSThreshold: audioConfig.echoSystemActiveRMS)
         let made = AsyncStream<TranscriptEvent>.makeStream()
         self._stream = made.stream
         self.cont = made.continuation
@@ -121,6 +122,11 @@ public final class RealEars: Ears, @unchecked Sendable {
     // Route audio through the VAD gate when present, else straight to the socket.
     func feedMic(_ data: Data) {
         if muteLock.withLock({ _micMuted }) { return }   // muted: drop mic audio entirely
+        if config.ambientFocusActive, config.ambientMusicRejection,
+           AudioSceneClassifier.isLikelyMusicOnly(data, sampleRate: config.sttSampleRate,
+                                                   speechThreshold: config.audioFocusAdjusted.echoSystemActiveRMS) {
+            return
+        }
         noteCaptured()
         micVocal.ingest(data)
         // Echo detection at capture time: if the mic is loud WHILE the speaker was loud
@@ -134,6 +140,11 @@ public final class RealEars: Ears, @unchecked Sendable {
         if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
     }
     func feedSystem(_ data: Data) {
+        if config.ambientFocusActive, config.ambientMusicRejection,
+           AudioSceneClassifier.isLikelyMusicOnly(data, sampleRate: config.sttSampleRate,
+                                                   speechThreshold: config.audioFocusAdjusted.echoSystemActiveRMS) {
+            return
+        }
         noteCaptured()
         systemVocal.ingest(data)
         // "The speaker is playing" comes from the raw system-audio energy at capture,

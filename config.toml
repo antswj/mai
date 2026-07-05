@@ -99,6 +99,18 @@ ai_model = "claude-haiku-4-5"
 ai_cap_seconds = 12
 ai_min_interval_seconds = 45
 
+[ambient]
+# Consent-gated sensitivity profile for noisy, nearby conversation that you are allowed
+# to capture. When both conversation_focus and consent_confirmed are true, Mai lowers
+# VAD thresholds, keeps more pre-roll, and rejects steady music/noise beds before STT.
+# This is not a covert eavesdropping mode.
+conversation_focus = false
+consent_confirmed = false
+music_rejection = true
+vad_onset = 0.35
+vad_offset = 0.25
+speech_rms_threshold = 0.008
+
 [echo]
 # Speaker-to-mic echo suppression: when audio plays through the speakers, the mic
 # picks it up and it would be transcribed twice (once as the real speaker from system

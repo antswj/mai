@@ -47,6 +47,10 @@ struct SettingsView: View {
 
             Section("Voice Activity") {
                 Toggle("On-device voice-activity gating", isOn: Binding(get: { model.config.vadEnabled }, set: { v in model.updateConfig { $0.vadEnabled = v } }))
+                Toggle("Ambient conversation focus", isOn: Binding(get: { model.config.ambientConversationFocus },
+                                                                    set: { v in model.updateConfig { $0.ambientConversationFocus = v } }))
+                Toggle("Consent confirmed for nearby capture", isOn: Binding(get: { model.config.ambientConsentConfirmed },
+                                                                              set: { v in model.updateConfig { $0.ambientConsentConfirmed = v } }))
                 slider("Speech onset", $onset, 0.2...0.9) { model.updateConfig { $0.vadOnset = onset } }
                 slider("Silence offset", $offset, 0.1...0.8) { model.updateConfig { $0.vadOffset = offset } }
                 slider("Silence hangover (seconds)", $hangover, 1...10, step: 1) { model.updateConfig { $0.vadSilenceHangoverSeconds = hangover } }

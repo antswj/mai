@@ -63,6 +63,15 @@ public struct Config: Sendable {
     public var coachingAIModel: String
     public var coachingAICapSeconds: Double
     public var coachingAIMinIntervalSeconds: Double
+    // Ambient Conversation Focus: a consent-gated sensitivity profile for noisy,
+    // nearby consented conversation. It lowers speech thresholds and rejects steady
+    // music/noise beds, but does not authorize covert recording.
+    public var ambientConversationFocus: Bool
+    public var ambientConsentConfirmed: Bool
+    public var ambientMusicRejection: Bool
+    public var ambientVadOnset: Double
+    public var ambientVadOffset: Double
+    public var ambientSpeechRMSThreshold: Double
     // Echo suppression (mic picking up speaker output). hold = how long a mic final is
     // held when system audio is active, so a matching system final can be compared
     // regardless of which stream finalizes first.
@@ -125,6 +134,12 @@ public struct Config: Sendable {
         coachingAIModel: String = "claude-haiku-4-5",
         coachingAICapSeconds: Double = 12,
         coachingAIMinIntervalSeconds: Double = 45,
+        ambientConversationFocus: Bool = false,
+        ambientConsentConfirmed: Bool = false,
+        ambientMusicRejection: Bool = true,
+        ambientVadOnset: Double = 0.35,
+        ambientVadOffset: Double = 0.25,
+        ambientSpeechRMSThreshold: Double = 0.008,
         echoSuppression: Bool = true,
         echoSystemActiveRMS: Double = 0.015
     ) {
@@ -156,8 +171,28 @@ public struct Config: Sendable {
         self.coachingAIModel = coachingAIModel
         self.coachingAICapSeconds = coachingAICapSeconds
         self.coachingAIMinIntervalSeconds = coachingAIMinIntervalSeconds
+        self.ambientConversationFocus = ambientConversationFocus
+        self.ambientConsentConfirmed = ambientConsentConfirmed
+        self.ambientMusicRejection = ambientMusicRejection
+        self.ambientVadOnset = ambientVadOnset
+        self.ambientVadOffset = ambientVadOffset
+        self.ambientSpeechRMSThreshold = ambientSpeechRMSThreshold
         self.echoSuppression = echoSuppression
         self.echoSystemActiveRMS = echoSystemActiveRMS
+    }
+
+    public var ambientFocusActive: Bool {
+        ambientConversationFocus && ambientConsentConfirmed
+    }
+
+    public var audioFocusAdjusted: Config {
+        guard ambientFocusActive else { return self }
+        var c = self
+        c.vadOnset = min(c.vadOnset, c.ambientVadOnset)
+        c.vadOffset = min(c.vadOffset, c.ambientVadOffset)
+        c.vadPrerollSeconds = max(c.vadPrerollSeconds, 1.5)
+        c.echoSystemActiveRMS = min(c.echoSystemActiveRMS, c.ambientSpeechRMSThreshold)
+        return c
     }
 
     /// Load from a config.toml. Missing file or missing keys fall back to defaults.
@@ -226,6 +261,12 @@ public struct Config: Sendable {
         if let v = str("coaching", "ai_model") { c.coachingAIModel = v }
         if let v = dbl("coaching", "ai_cap_seconds") { c.coachingAICapSeconds = v }
         if let v = dbl("coaching", "ai_min_interval_seconds") { c.coachingAIMinIntervalSeconds = v }
+        if let v = bln("ambient", "conversation_focus") { c.ambientConversationFocus = v }
+        if let v = bln("ambient", "consent_confirmed") { c.ambientConsentConfirmed = v }
+        if let v = bln("ambient", "music_rejection") { c.ambientMusicRejection = v }
+        if let v = dbl("ambient", "vad_onset") { c.ambientVadOnset = v }
+        if let v = dbl("ambient", "vad_offset") { c.ambientVadOffset = v }
+        if let v = dbl("ambient", "speech_rms_threshold") { c.ambientSpeechRMSThreshold = v }
         if let v = bln("echo", "suppression") { c.echoSuppression = v }
         if let v = dbl("echo", "system_active_rms") { c.echoSystemActiveRMS = v }
         return c

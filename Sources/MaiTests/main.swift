@@ -465,6 +465,8 @@ do {
         model: "stub",
         interfaceLanguage: .en)
     check(insight?.headline == "Adjust the pace", "AI coach produces a voice-aware coaching insight")
+    check(insight?.trust.contains { $0.label == "Framework" && $0.detail.contains("Motivational") } == true,
+          "AI coach names the psychology framework behind the move")
     check(insight?.trust.contains { $0.label == "Voice features" } == true,
           "AI coach trust includes vocal features")
 
@@ -611,6 +613,8 @@ do {
         $0.route == .coaching && $0.trust.map(\.label).contains("AI review")
     }
     check(card?.headline == "Adjust the pace", "AI voice coaching card surfaced through the engine")
+    check(card?.trust.map(\.label).contains("Framework") == true,
+          "AI voice coaching card carries a framework trust signal")
     check(card?.telemetry.provider == "AI Voice Coach", "telemetry labels AI voice coaching")
 }
 
@@ -1424,6 +1428,34 @@ do {
     check((signal?.meanPitchHz ?? 0) > 120 && (signal?.meanPitchHz ?? 999) < 240,
           "vocal tracker estimates pitch from audio")
     check(signal?.estimatedWordsPerMinute != nil, "vocal tracker estimates speaking pace")
+}
+
+section("Ambient conversation focus: consent-gated sensitivity and music rejection")
+do {
+    var cfg = Config()
+    cfg.ambientConversationFocus = true
+    check(!cfg.ambientFocusActive, "ambient focus is inactive without consent confirmation")
+    cfg.ambientConsentConfirmed = true
+    let adjusted = cfg.audioFocusAdjusted
+    check(adjusted.vadOnset < cfg.vadOnset && adjusted.vadOffset < cfg.vadOffset,
+          "ambient focus lowers VAD thresholds after consent")
+    check(adjusted.echoSystemActiveRMS < cfg.echoSystemActiveRMS,
+          "ambient focus lowers the speech RMS threshold")
+
+    let steadyMusic = sinePCM16(seconds: 1.0, hz: 220, amplitude: 0.35)
+    check(AudioSceneClassifier.isLikelyMusicOnly(steadyMusic, sampleRate: 16000, speechThreshold: 0.008),
+          "steady music-like audio is rejected")
+
+    var bursty: [Int16] = []
+    for block in 0..<10 {
+        let voiced = block % 2 == 0
+        for i in 0..<1600 {
+            let value = voiced ? sin(Double(i) / 16000.0 * 180.0 * 2 * Double.pi) * 0.4 : 0
+            bursty.append(Int16(value * 32767))
+        }
+    }
+    check(!AudioSceneClassifier.isLikelyMusicOnly(pcm16(bursty), sampleRate: 16000, speechThreshold: 0.008),
+          "bursty speech-like audio is not rejected as music")
 }
 
 section("Echo suppression: drops mic echo of system audio, keeps genuine user speech")

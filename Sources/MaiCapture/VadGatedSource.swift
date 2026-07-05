@@ -14,6 +14,7 @@ import MaiCore
 final class VadGatedSource: @unchecked Sendable {
     private let client: SonioxClient
     private let vad: SileroVAD
+    private let config: Config
     private let onSent: @Sendable (Int) -> Void   // bytes actually forwarded to Soniox
     private let lock = NSLock()
     private var gate: VadGate
@@ -29,6 +30,7 @@ final class VadGatedSource: @unchecked Sendable {
     init(client: SonioxClient, vad: SileroVAD, config: Config, onSent: @escaping @Sendable (Int) -> Void = { _ in }) {
         self.client = client
         self.vad = vad
+        self.config = config
         self.onSent = onSent
         let frameSeconds = Double(vad.frameSize) / Double(config.sttSampleRate)
         self.gate = VadGate(config: VadGateConfig(
@@ -43,6 +45,11 @@ final class VadGatedSource: @unchecked Sendable {
     // One chunk of raw PCM16 (Int16 LE, mono, at the STT sample rate).
     func feed(_ pcm16: Data) {
         lock.withLock {
+            if config.ambientFocusActive, config.ambientMusicRejection,
+               AudioSceneClassifier.isLikelyMusicOnly(pcm16, sampleRate: config.sttSampleRate,
+                                                       speechThreshold: config.echoSystemActiveRMS) {
+                return
+            }
             // Fail-open: a broken VAD streams everything rather than starving STT.
             if gatingDisabled {
                 client.sendAudio(pcm16); onSent(pcm16.count)

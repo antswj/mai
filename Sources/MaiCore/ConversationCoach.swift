@@ -112,6 +112,7 @@ public enum ConversationCoach {
         let score = max(0.55, min(0.92, number(json["score"]) ?? 0.74))
         let cues = stringArray(json["observed_voice_cues"]).prefix(3).joined(separator: " | ")
         let cueDetail = cues.isEmpty ? vocal.summary : cues
+        let framework = string(json["framework"]) ?? "Motivational Interviewing OARS + active listening"
 
         return CoachingInsight(
             key: "ai-vocal|\(speaker)",
@@ -120,6 +121,7 @@ public enum ConversationCoach {
             tier: tier,
             score: score,
             trust: [
+                TrustSignal(label: "Framework", detail: clipped(framework, max: 160), confidence: 0.80),
                 TrustSignal(label: "Voice features", detail: clipped(cueDetail, max: 180), confidence: 0.74),
                 TrustSignal(label: "Transcript evidence", detail: clipped(text), confidence: 0.76),
                 TrustSignal(label: "AI review", detail: "Vocal features plus recent transcript context.", confidence: 0.70),
@@ -194,6 +196,10 @@ public enum ConversationCoach {
 
     Rules:
     - Use observable signals only: pace, pauses, vocal energy, rough pitch movement, interruption/hesitation patterns, and transcript context.
+    - Ground the recommendation in recognized conversation/clinical communication frameworks:
+      Motivational Interviewing OARS (open questions, affirmations, reflections, summaries),
+      reflective/active listening, psychological safety, cognitive-load-aware communication,
+      conflict de-escalation, and interest-based negotiation.
     - Never claim someone is lying, deceptive, honest, dishonest, guilty, nervous, afraid, or hiding something.
     - Never diagnose mental state or intent. Phrase uncertainty as "may indicate", "could be a good moment", or "observed cue".
     - Prefer a concrete next move: ask a clarifying question, slow down, recap, invite a quieter person, confirm owner/deadline, or acknowledge friction.
@@ -204,6 +210,7 @@ public enum ConversationCoach {
         "headline": "short title",
         "info": "one to two concise sentences in the interface language",
         "recommended_move": "one concrete sentence",
+        "framework": "one named framework used",
         "tier": "medium",
         "score": 0.74,
         "observed_voice_cues": ["cue 1", "cue 2"]
