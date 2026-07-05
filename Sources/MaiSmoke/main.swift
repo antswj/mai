@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import CoreText
 import AppKit
+import Darwin
 import MaiCore
 import MaiCapture
 
@@ -14,6 +15,8 @@ import MaiCapture
 //   swift run MaiSmoke health     (provider health + Gemini quota/billing hints)
 //   swift run MaiSmoke golden     (replay golden anonymized bad-session traces)
 //   swift run MaiSmoke soak       (30-minute synthetic meeting soak, fast replay)
+//   swift run MaiSmoke wall-soak 30  (30-minute synthetic meeting soak, wall-clock)
+//   swift run MaiSmoke budget     (deterministic p95/p99 latency budget check)
 //
 // This is the only caller of GeminiVision and the real provider HTTP paths in this
 // step; the engine path is exercised by `swift test` with stubs.
@@ -57,6 +60,116 @@ final class SmokeRichSink: RichCardSink, @unchecked Sendable {
         upsert(card)
     }
     var all: [RichCard] { lock.withLock { order.compactMap { cards[$0] } } }
+    var counts: (cards: Int, pending: Int) {
+        lock.withLock {
+            let all = order.compactMap { cards[$0] }
+            return (all.count, all.filter { !$0.suppressed && !$0.pending.isEmpty }.count)
+        }
+    }
+}
+
+struct SmokeResourceSample {
+    let elapsedSeconds: Int
+    let rssMB: Double
+    let taskCount: Int
+    let cards: Int
+    let pending: Int
+}
+
+struct SmokeReplayResult {
+    let cards: [RichCard]
+    let elapsed: TimeInterval
+    let report: SyntheticSoakReport
+}
+
+func makeSmokeEngine(sink: SmokeRichSink, directoryPrefix: String) -> Engine {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(directoryPrefix)-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
+    let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
+    let cfg = Config(hardCapSeconds: 3, responseEnabled: true, onlineCapSeconds: 5)
+    return Engine(config: cfg,
+                  llm: StubLLM(),
+                  places: CachedPlacesProvider(base: StubPlaces(),
+                                               cacheURL: dir.appendingPathComponent("places.json")),
+                  location: FixedLocation(lat: cfg.testLat, lng: cfg.testLng),
+                  store: store,
+                  verbatim: verbatim,
+                  face: ConsoleFace(),
+                  richSink: sink,
+                  entity: CachedEntityLookup(base: StubEntityLookup(),
+                                             cacheURL: dir.appendingPathComponent("entity.json")),
+                  grounded: CachedGroundedSearch(base: StubGroundedSearch(),
+                                                 cacheURL: dir.appendingPathComponent("grounded.json")))
+}
+
+func waitForCardsToSettle(_ sink: SmokeRichSink, maxTicks: Int = 500) async {
+    for _ in 0..<maxTicks {
+        if !sink.all.contains(where: { !$0.suppressed && !$0.pending.isEmpty }) { break }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+}
+
+func replayTraceFast(_ trace: MaiTrace, durationMinutes: Int, directoryPrefix: String) async -> SmokeReplayResult {
+    let sink = SmokeRichSink()
+    let engine = makeSmokeEngine(sink: sink, directoryPrefix: directoryPrefix)
+    let started = Date()
+    for event in trace.events {
+        await engine.process(trace.input(for: event))
+    }
+    await waitForCardsToSettle(sink)
+    let elapsed = Date().timeIntervalSince(started)
+    let cards = sink.all
+    let report = SyntheticSoak.report(cards: cards, durationMinutes: durationMinutes, eventCount: trace.events.count)
+    return SmokeReplayResult(cards: cards, elapsed: elapsed, report: report)
+}
+
+func latencyBudgetOK(cards: [RichCard], p95Budget: Int = 3000, p99Budget: Int = 3000) -> Bool {
+    let rows = LatencyTelemetryStats.percentileRows(from: cards.map(\.telemetry))
+    guard !rows.isEmpty else {
+        print("  budget: FAIL (no telemetry rows)")
+        return false
+    }
+    var ok = true
+    for row in rows {
+        let pass = row.p95 <= p95Budget && row.p99 <= p99Budget
+        ok = ok && pass
+        print("  budget \(row.route.rawValue)/\(row.provider): p50=\(row.p50) p95=\(row.p95) p99=\(row.p99) n=\(row.count) \(pass ? "ok" : "ALERT")")
+    }
+    return ok
+}
+
+func currentResourceFootprint(sink: SmokeRichSink, elapsedSeconds: Int) -> SmokeResourceSample {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<integer_t>.stride)
+    let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    let rss = kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576.0 : 0
+    var threads: thread_act_array_t?
+    var threadCount = mach_msg_type_number_t(0)
+    if task_threads(mach_task_self_, &threads, &threadCount) == KERN_SUCCESS, let threads {
+        vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threads)),
+                      vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride))
+    }
+    let counts = sink.counts
+    return SmokeResourceSample(elapsedSeconds: elapsedSeconds, rssMB: rss,
+                               taskCount: Int(threadCount), cards: counts.cards, pending: counts.pending)
+}
+
+func chart(_ label: String, _ values: [Double], suffix: String = "") {
+    guard !values.isEmpty else { return }
+    let chars = Array(" .:-=+*#%@")
+    let minValue = values.min() ?? 0
+    let maxValue = values.max() ?? minValue
+    let span = max(maxValue - minValue, 0.0001)
+    let points = values.map { value -> Character in
+        let idx = Int(((value - minValue) / span * Double(chars.count - 1)).rounded())
+        return chars[max(0, min(chars.count - 1, idx))]
+    }
+    print("  \(label): \(String(points))  min=\(String(format: "%.1f", minValue))\(suffix) max=\(String(format: "%.1f", maxValue))\(suffix)")
 }
 
 func smokeLLM() async {
@@ -255,34 +368,9 @@ func smokeSoak(minutes: Int = 30) async {
     line(); print("Synthetic meeting soak (\(minutes) min simulated, fast replay)")
     print("  generated audio turns, screen changes, language switches, interruptions, repeated topics")
     let trace = SyntheticSoak.trace(durationMinutes: minutes)
-    let sink = SmokeRichSink()
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mai-soak-\(UUID().uuidString)")
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
-    let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
-    let cfg = Config(hardCapSeconds: 3, responseEnabled: true, onlineCapSeconds: 5)
-    let engine = Engine(config: cfg,
-                        llm: StubLLM(),
-                        places: CachedPlacesProvider(base: StubPlaces()),
-                        location: FixedLocation(lat: cfg.testLat, lng: cfg.testLng),
-                        store: store,
-                        verbatim: verbatim,
-                        face: ConsoleFace(),
-                        richSink: sink,
-                        entity: CachedEntityLookup(base: StubEntityLookup()),
-                        grounded: CachedGroundedSearch(base: StubGroundedSearch()))
-
-    let started = Date()
-    for event in trace.events {
-        await engine.process(trace.input(for: event))
-    }
-    for _ in 0..<500 {
-        if !sink.all.contains(where: { !$0.pending.isEmpty }) { break }
-        try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-    let elapsed = Date().timeIntervalSince(started)
-    let report = SyntheticSoak.report(cards: sink.all, durationMinutes: minutes, eventCount: trace.events.count)
-    print("  replay wall time: \(String(format: "%.2f", elapsed))s")
+    let result = await replayTraceFast(trace, durationMinutes: minutes, directoryPrefix: "mai-soak")
+    let report = result.report
+    print("  replay wall time: \(String(format: "%.2f", result.elapsed))s")
     print("  events: \(report.eventCount), resolved cards: \(report.resolvedCards), suppressed: \(report.suppressedCards), weak: \(report.weakCards)")
     print("  max first-paint: \(report.maxFirstPaintMs) ms, max final-fill: \(report.maxFinalFillMs) ms")
     print("  routes: \(report.routeCounts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))")
@@ -293,53 +381,72 @@ func smokeSoak(minutes: Int = 30) async {
 
 func smokeGolden() async {
     line(); print("Golden trace regression smoke")
-    let path = "Tests/MaiCoreTests/Fixtures/golden_trace_bad_session_v1.json"
-    guard let data = FileManager.default.contents(atPath: path),
-          let trace = try? JSONDecoder.mai.decode(MaiTrace.self, from: data) else {
-        print("  fixture missing from repo checkout: \(path)")
-        print("  RESULT: skipped")
-        return
-    }
-    let sink = SmokeRichSink()
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mai-golden-\(UUID().uuidString)")
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let store = try! SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
-    let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
-    let cfg = Config(hardCapSeconds: 3, responseEnabled: true, onlineCapSeconds: 5)
-    let engine = Engine(config: cfg,
-                        llm: StubLLM(),
-                        places: CachedPlacesProvider(base: StubPlaces(),
-                                                     cacheURL: dir.appendingPathComponent("places.json")),
-                        location: FixedLocation(lat: cfg.testLat, lng: cfg.testLng),
-                        store: store,
-                        verbatim: verbatim,
-                        face: ConsoleFace(),
-                        richSink: sink,
-                        entity: CachedEntityLookup(base: StubEntityLookup(),
-                                                   cacheURL: dir.appendingPathComponent("entity.json")),
-                        grounded: CachedGroundedSearch(base: StubGroundedSearch(),
-                                                       cacheURL: dir.appendingPathComponent("grounded.json")))
-
-    let started = Date()
-    for event in trace.events {
-        await engine.process(trace.input(for: event))
-    }
-    for _ in 0..<400 {
-        let cards = sink.all
-        if cards.count >= 6 && !cards.contains(where: { !$0.suppressed && !$0.pending.isEmpty }) { break }
-        try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-    let cards = sink.all.filter { !$0.suppressed && $0.pending.isEmpty }
+    let pack = GoldenTracePacks.badSessionV1
+    let result = await replayTraceFast(pack.trace, durationMinutes: 1, directoryPrefix: "mai-golden")
+    let cards = result.cards.filter { !$0.suppressed && $0.pending.isEmpty }
     let routes = Set(cards.map(\.route.rawValue))
     let weak = cards.filter { ($0.rating?.score ?? 0) < CardRating.usefulThreshold }.count
     let maxFirst = cards.compactMap(\.latencyMs).max() ?? 0
-    let elapsed = Date().timeIntervalSince(started)
-    print("  replay wall time: \(String(format: "%.2f", elapsed))s")
-    print("  events: \(trace.events.count), cards: \(cards.count), weak: \(weak), max first-paint: \(maxFirst) ms")
+    let assertions = GoldenTraceAssert.evaluate(pack: pack, cards: result.cards)
+    let failed = assertions.filter { !$0.passed }
+    print("  replay wall time: \(String(format: "%.2f", result.elapsed))s")
+    print("  events: \(pack.trace.events.count), cards: \(cards.count), weak: \(weak), max first-paint: \(maxFirst) ms")
     print("  routes: \(routes.sorted().joined(separator: ", "))")
+    for assertion in assertions {
+        print("  assertion \(assertion.label): \(assertion.passed ? "ok" : "FAIL") - \(assertion.detail)")
+    }
     let ok = cards.count >= 6 && weak == 0 && maxFirst <= 3000
         && routes.contains("fresh") && routes.contains("technical") && routes.contains("preparedReply")
+        && failed.isEmpty
     print("  RESULT: \(ok ? "ok" : "attention")")
+}
+
+func smokeWallClockSoak(minutes: Double = 30) async {
+    let seconds = max(1, Int((minutes * 60).rounded()))
+    line(); print("Synthetic meeting soak (\(String(format: "%.1f", minutes)) min wall-clock)")
+    let trace = SyntheticSoak.trace(durationSeconds: seconds)
+    let sink = SmokeRichSink()
+    let engine = makeSmokeEngine(sink: sink, directoryPrefix: "mai-wall-soak")
+    let started = Date()
+    var samples: [SmokeResourceSample] = []
+    var nextEvent = 0
+    while true {
+        let elapsed = Date().timeIntervalSince(started)
+        while nextEvent < trace.events.count && Double(trace.events[nextEvent].offsetMs) / 1000.0 <= elapsed {
+            await engine.process(trace.input(for: trace.events[nextEvent]))
+            nextEvent += 1
+        }
+        samples.append(currentResourceFootprint(sink: sink, elapsedSeconds: Int(elapsed.rounded())))
+        if elapsed >= Double(seconds), nextEvent >= trace.events.count { break }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+    await waitForCardsToSettle(sink)
+    let cards = sink.all
+    let report = SyntheticSoak.report(cards: cards, durationMinutes: max(1, Int(minutes.rounded())),
+                                      eventCount: trace.events.count)
+    print("  events: \(report.eventCount), resolved cards: \(report.resolvedCards), suppressed: \(report.suppressedCards), weak: \(report.weakCards)")
+    print("  max first-paint: \(report.maxFirstPaintMs) ms, max final-fill: \(report.maxFinalFillMs) ms")
+    chart("rss", samples.map(\.rssMB), suffix: " MB")
+    chart("tasks", samples.map { Double($0.taskCount) })
+    chart("cards", samples.map { Double($0.cards) })
+    chart("pending", samples.map { Double($0.pending) })
+    let ok = report.resolvedCards > 0 && report.weakCards == 0
+        && report.maxFirstPaintMs <= 3000 && latencyBudgetOK(cards: cards)
+    print("  RESULT: \(ok ? "ok" : "attention")")
+}
+
+func smokeBudget() async {
+    line(); print("Latency budget smoke (p95/p99 by route/provider)")
+    let golden = await replayTraceFast(GoldenTracePacks.badSessionV1.trace, durationMinutes: 1, directoryPrefix: "mai-budget-golden")
+    let soak = await replayTraceFast(SyntheticSoak.trace(durationMinutes: 30), durationMinutes: 30, directoryPrefix: "mai-budget-soak")
+    let goldenOK = latencyBudgetOK(cards: golden.cards)
+    let soakOK = latencyBudgetOK(cards: soak.cards)
+    let goldenAssertions = GoldenTraceAssert.evaluate(pack: GoldenTracePacks.badSessionV1, cards: golden.cards)
+    let assertionsOK = goldenAssertions.allSatisfy(\.passed)
+    print("  golden assertions: \(assertionsOK ? "ok" : "ALERT")")
+    let ok = goldenOK && soakOK && assertionsOK
+    print("  RESULT: \(ok ? "ok" : "ALERT")")
+    if !ok { exit(1) }
 }
 
 switch which {
@@ -356,6 +463,10 @@ case "golden": await smokeGolden()
 case "soak":
     let minutes = args.dropFirst().first.flatMap(Int.init) ?? 30
     await smokeSoak(minutes: minutes)
+case "wall-soak":
+    let minutes = args.dropFirst().first.flatMap(Double.init) ?? 30
+    await smokeWallClockSoak(minutes: minutes)
+case "budget": await smokeBudget()
 default:
     await smokeLLM(); await smokePlaces(); await smokeVision(); await smokeSoniox(); await smokeScreen()
     smokeVAD(); await smokeEntity(); await smokeGrounded(); await smokeHealth(); await smokeGolden(); await smokeSoak(minutes: 30)

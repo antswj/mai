@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FallbackGroundedSearch: GroundedSearch {
+public struct FallbackGroundedSearch: RoutedGroundedSearch {
     private let primary: GroundedSearch
     private let fallback: GroundedSearch
 
@@ -10,10 +10,20 @@ public struct FallbackGroundedSearch: GroundedSearch {
     }
 
     public func answer(query: String, interface: Language) async throws -> GroundedResult {
+        try await answer(query: query, interface: interface, route: .fresh)
+    }
+
+    public func answer(query: String, interface: Language, route: LookupRoute) async throws -> GroundedResult {
         do {
+            if let routed = primary as? any RoutedGroundedSearch {
+                return try await routed.answer(query: query, interface: interface, route: route)
+            }
             return try await primary.answer(query: query, interface: interface)
         } catch {
             guard Self.shouldFallback(error) else { throw error }
+            if let routed = fallback as? any RoutedGroundedSearch {
+                return try await routed.answer(query: query, interface: interface, route: route)
+            }
             return try await fallback.answer(query: query, interface: interface)
         }
     }

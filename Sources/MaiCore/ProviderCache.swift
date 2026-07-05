@@ -166,9 +166,10 @@ public struct CachedEntityLookup: EntityLookup {
 private struct GroundedCacheKey: Codable, Hashable, Sendable {
     let query: String
     let interface: Language
+    let route: LookupRoute?
 }
 
-public struct CachedGroundedSearch: GroundedSearch {
+public struct CachedGroundedSearch: RoutedGroundedSearch {
     private let base: GroundedSearch
     private let cache: DiskTTLCacheBox<GroundedCacheKey, GroundedResult>
 
@@ -179,9 +180,18 @@ public struct CachedGroundedSearch: GroundedSearch {
     }
 
     public func answer(query: String, interface: Language) async throws -> GroundedResult {
-        let key = GroundedCacheKey(query: query.normalizedCacheKey, interface: interface)
+        try await answer(query: query, interface: interface, route: .fresh)
+    }
+
+    public func answer(query: String, interface: Language, route: LookupRoute) async throws -> GroundedResult {
+        let key = GroundedCacheKey(query: query.normalizedCacheKey, interface: interface, route: route)
         if let cached = await cache.value(for: key) { return cached }
-        let result = try await base.answer(query: query, interface: interface)
+        let result: GroundedResult
+        if let routed = base as? any RoutedGroundedSearch {
+            result = try await routed.answer(query: query, interface: interface, route: route)
+        } else {
+            result = try await base.answer(query: query, interface: interface)
+        }
         if !result.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             await cache.insert(result, for: key)
         }

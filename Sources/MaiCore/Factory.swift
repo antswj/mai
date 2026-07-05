@@ -55,9 +55,27 @@ public enum MaiFactory {
     }
 
     public static func makeGroundedSearchBase(config: Config, secrets: Secrets) -> GroundedSearch {
-        let fallback = DuckDuckGoGroundedSearch(fallback: WikipediaGroundedSearch())
-        guard let key = secrets.get("GEMINI_API_KEY") else { return fallback }
-        let primary = GeminiGroundedSearch(apiKey: key, model: config.screenModel)
-        return FallbackGroundedSearch(primary: primary, fallback: fallback)
+        let webFallback = DuckDuckGoGroundedSearch(fallback: WikipediaGroundedSearch())
+        let wiki = WikipediaGroundedSearch()
+        var candidates: [RoutedGroundedCandidate] = [
+            RoutedGroundedCandidate(
+                profile: GroundedProviderProfile(id: "duckduckgo", estimatedQuality: 0.68,
+                                                 estimatedLatencyMs: 800, costUnits: 0,
+                                                 supportedRoutes: [.fresh, .technical]),
+                provider: webFallback),
+            RoutedGroundedCandidate(
+                profile: GroundedProviderProfile(id: "wikipedia", estimatedQuality: 0.72,
+                                                 estimatedLatencyMs: 500, costUnits: 0,
+                                                 supportedRoutes: [.entity, .technical, .screen]),
+                provider: wiki),
+        ]
+        if let key = secrets.get("GEMINI_API_KEY") {
+            candidates.append(RoutedGroundedCandidate(
+                profile: GroundedProviderProfile(id: "gemini-grounded", estimatedQuality: 0.94,
+                                                 estimatedLatencyMs: 1800, costUnits: 0.2,
+                                                 supportedRoutes: [.fresh, .technical]),
+                provider: GeminiGroundedSearch(apiKey: key, model: config.screenModel)))
+        }
+        return PolicyGroundedSearch(candidates: candidates)
     }
 }

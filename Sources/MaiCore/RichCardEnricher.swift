@@ -182,17 +182,17 @@ public actor RichCardEnricher {
                 return ContentOutcome(info: r.summary, image: r.imageURL, source: src,
                                       html: nil, action: nil, sources: [src])
             }
-            let grounded = await groundedContent(query: plan.query)
+            let grounded = await groundedContent(query: plan.query, route: plan.route)
             if grounded.info != nil { return grounded }
             return await explainContent(topic: topic, window: window)
         case .fresh, .technical:
             // Both go to grounded web search first; the model is the fallback only when
             // search returns nothing. (Technical no longer short-circuits to the model.)
-            let grounded = await groundedContent(query: plan.query)
+            let grounded = await groundedContent(query: plan.query, route: plan.route)
             if grounded.info != nil { return grounded }
             return await explainContent(topic: topic, window: window)
         default:
-            let grounded = await groundedContent(query: plan.query)
+            let grounded = await groundedContent(query: plan.query, route: plan.route)
             if grounded.info != nil { return grounded }
             return await explainContent(topic: topic, window: window)
         }
@@ -207,9 +207,12 @@ public actor RichCardEnricher {
         return ContentOutcome(info: answer, image: nil, source: nil, html: nil, action: nil, unverified: answer != nil)
     }
 
-    private nonisolated func groundedContent(query: String) async -> ContentOutcome {
+    private nonisolated func groundedContent(query: String, route: LookupRoute) async -> ContentOutcome {
         let g: GroundedResult? = (await withTimeoutOrNil(seconds: config.onlineCapSeconds) { [grounded, interface] in
-            try await grounded.answer(query: query, interface: interface)
+            if let routed = grounded as? any RoutedGroundedSearch {
+                return try await routed.answer(query: query, interface: interface, route: route)
+            }
+            return try await grounded.answer(query: query, interface: interface)
         }) ?? nil
         guard let g, !g.answer.isEmpty else {
             return ContentOutcome(info: nil, image: nil, source: nil, html: nil, action: nil)

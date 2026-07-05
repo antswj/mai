@@ -51,6 +51,139 @@ public struct MaiTrace: Codable, Sendable, Equatable {
     }
 }
 
+public struct GoldenCardExpectation: Codable, Identifiable, Sendable, Equatable {
+    public let id: String
+    public let label: String
+    public let route: LookupRoute
+    public let headlineContains: String?
+    public let requiresSource: Bool
+    public let requiresResponse: Bool
+    public let minQuality: Double
+    public let maxFirstPaintMs: Int
+
+    public init(id: String, label: String, route: LookupRoute, headlineContains: String? = nil,
+                requiresSource: Bool = false, requiresResponse: Bool = false,
+                minQuality: Double = CardRating.usefulThreshold, maxFirstPaintMs: Int = 3000) {
+        self.id = id
+        self.label = label
+        self.route = route
+        self.headlineContains = headlineContains
+        self.requiresSource = requiresSource
+        self.requiresResponse = requiresResponse
+        self.minQuality = minQuality
+        self.maxFirstPaintMs = maxFirstPaintMs
+    }
+}
+
+public struct GoldenTracePack: Codable, Identifiable, Sendable, Equatable {
+    public let id: String
+    public let name: String
+    public let summary: String
+    public let trace: MaiTrace
+    public let expectations: [GoldenCardExpectation]
+
+    public init(id: String, name: String, summary: String, trace: MaiTrace,
+                expectations: [GoldenCardExpectation]) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.trace = trace
+        self.expectations = expectations
+    }
+}
+
+public struct GoldenTraceAssertionResult: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let label: String
+    public let passed: Bool
+    public let detail: String
+
+    public init(id: String, label: String, passed: Bool, detail: String) {
+        self.id = id
+        self.label = label
+        self.passed = passed
+        self.detail = detail
+    }
+}
+
+public enum GoldenTraceAssert {
+    public static func evaluate(pack: GoldenTracePack, cards: [RichCard]) -> [GoldenTraceAssertionResult] {
+        let resolved = cards.filter { !$0.suppressed && $0.pending.isEmpty }
+        return pack.expectations.map { expectation in
+            let candidates = resolved.filter { card in
+                guard card.route == expectation.route else { return false }
+                if let needle = expectation.headlineContains, !needle.isEmpty {
+                    return card.headline.localizedCaseInsensitiveContains(needle)
+                }
+                return true
+            }
+            guard let card = candidates.first else {
+                return GoldenTraceAssertionResult(id: expectation.id, label: expectation.label,
+                                                  passed: false, detail: "missing \(expectation.route.rawValue) card")
+            }
+            if expectation.requiresSource && card.source == nil && card.sources.isEmpty {
+                return GoldenTraceAssertionResult(id: expectation.id, label: expectation.label,
+                                                  passed: false, detail: "card had no source")
+            }
+            if expectation.requiresResponse && card.response == nil {
+                return GoldenTraceAssertionResult(id: expectation.id, label: expectation.label,
+                                                  passed: false, detail: "card had no prepared response")
+            }
+            let quality = card.rating?.score ?? 0
+            if quality < expectation.minQuality {
+                return GoldenTraceAssertionResult(id: expectation.id, label: expectation.label,
+                                                  passed: false, detail: "quality \(String(format: "%.2f", quality)) below \(String(format: "%.2f", expectation.minQuality))")
+            }
+            let firstPaint = card.latencyMs ?? Int.max
+            if firstPaint > expectation.maxFirstPaintMs {
+                return GoldenTraceAssertionResult(id: expectation.id, label: expectation.label,
+                                                  passed: false, detail: "first paint \(firstPaint) ms above \(expectation.maxFirstPaintMs) ms")
+            }
+            return GoldenTraceAssertionResult(id: expectation.id, label: expectation.label,
+                                              passed: true, detail: "matched \(card.headline)")
+        }
+    }
+}
+
+public enum GoldenTracePacks {
+    public static let badSessionV1 = GoldenTracePack(
+        id: "bad-session-v1",
+        name: "Bad Session V1",
+        summary: "Language switches, repeated topics, screen changes, places, fresh info, and Salesforce technical context.",
+        trace: MaiTrace(startedAt: Date(timeIntervalSince1970: 1_783_204_800), events: [
+            MaiTraceEvent(kind: .transcript, offsetMs: 0, speaker: "Speaker 1", language: "en", text: "okay"),
+            MaiTraceEvent(kind: .screen, offsetMs: 1000, speaker: nil, language: nil,
+                          text: "Synthetic Salesforce engineering screen with retries, replay IDs, dead-letter handling, and backpressure.",
+                          subject: "Salesforce Platform Events replay ID recovery"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 2000, speaker: "Speaker 2", language: "en", text: "what's 15% of 80"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 3000, speaker: "Speaker 3", language: "ja", text: "ngl ちょっとお寿司食べたい"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 4000, speaker: "Speaker 4", language: "en", text: "what is the latest iPhone price today"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 5000, speaker: "Speaker 5", language: "ja", text: "それでは、ご意見をお願いできますか？"),
+            MaiTraceEvent(kind: .screen, offsetMs: 6000, speaker: nil, language: nil,
+                          text: "Synthetic Malaysia market expansion slide.", subject: "Malaysia"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 7000, speaker: "Speaker 6", language: "en",
+                          text: "how should we handle Salesforce Platform Events retry failures?"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 8000, speaker: "Speaker 7", language: "zh", text: "你怎么看"),
+            MaiTraceEvent(kind: .transcript, offsetMs: 9000, speaker: "Speaker 4", language: "en", text: "what is the latest iPhone price today"),
+        ]),
+        expectations: [
+            GoldenCardExpectation(id: "salesforce-screen", label: "Salesforce screen card",
+                                  route: .technical, headlineContains: "Salesforce", requiresSource: true),
+            GoldenCardExpectation(id: "trivial-math", label: "Instant math",
+                                  route: .trivial, headlineContains: "15%"),
+            GoldenCardExpectation(id: "nearby-sushi", label: "Nearby sushi",
+                                  route: .place, headlineContains: "sushi"),
+            GoldenCardExpectation(id: "fresh-current", label: "Fresh current answer",
+                                  route: .fresh, headlineContains: "iPhone", requiresSource: true),
+            GoldenCardExpectation(id: "reply-ja", label: "Japanese reply",
+                                  route: .preparedReply, requiresResponse: true),
+            GoldenCardExpectation(id: "malaysia-screen", label: "Malaysia screen entity",
+                                  route: .entity, headlineContains: "Malaysia", requiresSource: true),
+        ])
+
+    public static let all: [GoldenTracePack] = [badSessionV1]
+}
+
 public enum TraceAnonymizer {
     public static func transcript(_ event: TranscriptEvent, sessionStartedAt: Date) -> MaiTraceEvent? {
         guard event.isFinal else { return nil }
@@ -132,8 +265,12 @@ public struct SyntheticSoakReport: Codable, Sendable, Equatable {
 
 public enum SyntheticSoak {
     public static func trace(durationMinutes: Int = 30, startedAt: Date = Date()) -> MaiTrace {
-        let totalSeconds = max(60, durationMinutes * 60)
-        let interval = 12
+        trace(durationSeconds: max(60, durationMinutes * 60), startedAt: startedAt)
+    }
+
+    public static func trace(durationSeconds: Int, startedAt: Date = Date()) -> MaiTrace {
+        let totalSeconds = max(1, durationSeconds)
+        let interval = totalSeconds < 120 ? 2 : 12
         var events: [MaiTraceEvent] = []
         var offset = 0
         var i = 0

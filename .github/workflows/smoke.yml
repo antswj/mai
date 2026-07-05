@@ -1,0 +1,46 @@
+name: Mai Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  smoke:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
+      GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+      HOTPEPPER_API_KEY: ${{ secrets.HOTPEPPER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Acceptance harness
+        run: swift run MaiTests
+
+      - name: Golden traces
+        run: swift run MaiSmoke golden
+
+      - name: Fast soak
+        run: swift run MaiSmoke soak 30
+
+      - name: Latency budgets
+        run: swift run MaiSmoke budget
+
+      - name: Provider health
+        if: ${{ env.ANTHROPIC_API_KEY != '' || env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' }}
+        run: swift run MaiSmoke health

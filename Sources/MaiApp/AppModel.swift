@@ -80,6 +80,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var feedbackSummary = CardFeedbackSummary()
     @Published private(set) var traceEventCount = 0
     @Published private(set) var traceReplayRunning = false
+    @Published private(set) var goldenPackRunningID: String?
+    @Published private(set) var goldenPackResults: [GoldenTraceAssertionResult] = []
     private(set) var summonedAt = Date.distantPast
     // Last time anything happened (a partial line, a final line, or a card). Drives the
     // HUD idle timer so it rides through the natural pauses of a conversation.
@@ -247,6 +249,7 @@ final class AppModel: ObservableObject {
         captureRetryTask?.cancel(); captureRetryTask = nil
         traceReplayTask?.cancel(); traceReplayTask = nil
         traceReplayRunning = false
+        goldenPackRunningID = nil
         realEars?.stop(); realEyes?.stop()
         simEars?.finish(); simEyes?.finish()
         if let oldEngine { Task { await oldEngine.endSession() } }
@@ -322,7 +325,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func replayTrace(_ trace: MaiTrace, name: String = "trace") {
+    var goldenTracePacks: [GoldenTracePack] { GoldenTracePacks.all }
+
+    func replayGoldenPack(_ pack: GoldenTracePack) {
+        goldenPackResults = []
+        goldenPackRunningID = pack.id
+        replayTrace(pack.trace, name: pack.name, goldenPack: pack)
+    }
+
+    func replayTrace(_ trace: MaiTrace, name: String = "trace", goldenPack: GoldenTracePack? = nil) {
         guard !traceReplayRunning else { return }
         let keepSimulated = useSimulated
         if noteTaking { stopNoteTaking() }
@@ -345,12 +356,26 @@ final class AppModel: ObservableObject {
                 await MainActor.run { self?.reflectReplayInput(input) }
                 try? await Task.sleep(nanoseconds: 15_000_000)
             }
+            for _ in 0..<400 {
+                let pending = await MainActor.run { self?.richItems.contains { !$0.suppressed && !$0.pending.isEmpty } ?? false }
+                if !pending { break }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
             await MainActor.run {
                 guard let self else { return }
+                if let goldenPack {
+                    self.goldenPackResults = GoldenTraceAssert.evaluate(pack: goldenPack, cards: self.richItems)
+                    let failed = self.goldenPackResults.filter { !$0.passed }.count
+                    self.status = failed == 0
+                        ? "Golden pack passed: \(goldenPack.name)."
+                        : "Golden pack failed: \(failed) issue(s) in \(goldenPack.name)."
+                } else {
+                    self.status = "Replayed \(name) (\(trace.events.count) events)."
+                }
                 self.traceReplayRunning = false
+                self.goldenPackRunningID = nil
                 self.traceReplayTask = nil
                 self.useSimulated = keepSimulated || self.useSimulated
-                self.status = "Replayed \(name) (\(trace.events.count) events)."
             }
         }
     }

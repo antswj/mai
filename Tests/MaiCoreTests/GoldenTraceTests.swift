@@ -27,7 +27,8 @@ final class GoldenTraceSink: RichCardSink, @unchecked Sendable {
 
 @Suite struct GoldenTraceTests {
     @Test func badSessionGoldenTraceReplaysIntoUsefulLowLatencyCards() async throws {
-        let trace = try loadGoldenTrace("golden_trace_bad_session_v1")
+        let pack = GoldenTracePacks.badSessionV1
+        let trace = pack.trace
         let dir = maiTempDir()
         let store = try SQLiteStore(path: dir.appendingPathComponent("mai.sqlite").path)
         let verbatim = VerbatimLog(directory: dir.path, filename: "verbatim.jsonl")
@@ -69,6 +70,14 @@ final class GoldenTraceSink: RichCardSink, @unchecked Sendable {
         #expect(cards.contains { $0.route == .preparedReply && $0.response?.spoken.isEmpty == false })
         #expect(cards.allSatisfy { ($0.latencyMs ?? 0) <= 3000 })
         #expect(cards.allSatisfy { ($0.rating?.score ?? 0) >= CardRating.usefulThreshold })
+
+        let results = GoldenTraceAssert.evaluate(pack: pack, cards: sink.all)
+        #expect(results.allSatisfy { $0.passed })
+    }
+
+    @Test func fixtureMatchesNamedGoldenPack() throws {
+        let trace = try loadGoldenTrace("golden_trace_bad_session_v1")
+        #expect(trace.events == GoldenTracePacks.badSessionV1.trace.events)
     }
 
     private func loadGoldenTrace(_ name: String) throws -> MaiTrace {

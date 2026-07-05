@@ -43,6 +43,16 @@ public protocol GroundedSearch: Sendable {
     func answer(query: String, interface: Language) async throws -> GroundedResult
 }
 
+public protocol RoutedGroundedSearch: GroundedSearch {
+    func answer(query: String, interface: Language, route: LookupRoute) async throws -> GroundedResult
+}
+
+public extension RoutedGroundedSearch {
+    func answer(query: String, interface: Language) async throws -> GroundedResult {
+        try await answer(query: query, interface: interface, route: .fresh)
+    }
+}
+
 // Cheap script detection so a suggested response (Part B) and entity resolution can
 // follow the language that was actually spoken, without an extra model call.
 public enum ScriptDetect {

@@ -160,4 +160,22 @@ import Testing
 
         #expect(result.answer == "fallback answer")
     }
+
+    @Test func providerRoutingPolicyRanksByRouteQualityLatencyAndCost() async throws {
+        let policy = ProviderRoutingPolicy()
+        let profiles = [
+            GroundedProviderProfile(id: "fast-free", estimatedQuality: 0.68,
+                                    estimatedLatencyMs: 700, costUnits: 0,
+                                    supportedRoutes: [.fresh, .technical]),
+            GroundedProviderProfile(id: "rich-paid", estimatedQuality: 0.94,
+                                    estimatedLatencyMs: 1800, costUnits: 0.2,
+                                    supportedRoutes: [.fresh, .technical]),
+            GroundedProviderProfile(id: "wiki", estimatedQuality: 0.72,
+                                    estimatedLatencyMs: 500, costUnits: 0,
+                                    supportedRoutes: [.entity, .technical]),
+        ]
+
+        #expect(policy.rankedProfiles(profiles, route: .fresh).first?.id == "rich-paid")
+        #expect(policy.rankedProfiles(profiles, route: .technical).first?.id == "wiki")
+    }
 }

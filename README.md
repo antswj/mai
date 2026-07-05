@@ -381,6 +381,8 @@ Step-3 knobs, also in `config.toml`:
   swift run MaiSmoke grounded # Gemini grounded web search with real sources
   swift run MaiSmoke health   # provider health, including Gemini quota/billing hints
   swift run MaiSmoke soak     # 30-minute synthetic meeting soak, replayed fast
+  swift run MaiSmoke wall-soak 30  # 30-minute synthetic meeting soak on wall-clock time
+  swift run MaiSmoke budget   # p95/p99 latency budget alerts by route/provider
   ```
 
   The `soniox` check needs a funded Soniox account; with an empty balance it prints

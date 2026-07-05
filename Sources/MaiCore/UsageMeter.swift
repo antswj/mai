@@ -133,12 +133,19 @@ public struct MeteredLLM: LLMProvider {
 }
 
 // Wraps a grounded-search provider to count search calls toward the spend meter.
-public struct MeteredGrounded: GroundedSearch {
+public struct MeteredGrounded: RoutedGroundedSearch {
     private let wrapped: GroundedSearch
     private let meter: UsageMeter
     public init(_ wrapped: GroundedSearch, meter: UsageMeter) { self.wrapped = wrapped; self.meter = meter }
     public func answer(query: String, interface: Language) async throws -> GroundedResult {
+        try await answer(query: query, interface: interface, route: .fresh)
+    }
+
+    public func answer(query: String, interface: Language, route: LookupRoute) async throws -> GroundedResult {
         await meter.recordSearch()
+        if let routed = wrapped as? any RoutedGroundedSearch {
+            return try await routed.answer(query: query, interface: interface, route: route)
+        }
         return try await wrapped.answer(query: query, interface: interface)
     }
 }

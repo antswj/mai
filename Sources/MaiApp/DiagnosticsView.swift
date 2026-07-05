@@ -59,6 +59,8 @@ struct LatencyTelemetryView: View {
                 RouteThresholdsView(rows: model.feedbackRouteThresholds)
             }
 
+            GoldenPacksView(model: model)
+
             Divider()
 
             ScrollView {
@@ -127,6 +129,51 @@ private struct TelemetryRow: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct GoldenPacksView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Golden Packs").font(.subheadline.weight(.semibold))
+            ForEach(model.goldenTracePacks) { pack in
+                HStack(alignment: .top, spacing: 10) {
+                    Button { model.replayGoldenPack(pack) } label: {
+                        Label(model.goldenPackRunningID == pack.id ? "Running" : pack.name,
+                              systemImage: "checklist")
+                    }
+                    .disabled(model.traceReplayRunning)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pack.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Text("\(pack.expectations.count) expectations")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            if !model.goldenPackResults.isEmpty {
+                ForEach(model.goldenPackResults) { result in
+                    HStack {
+                        Image(systemName: result.passed ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                            .foregroundStyle(result.passed ? Color.green : Color.red)
+                        Text(result.label).font(.caption.weight(.semibold))
+                        Spacer()
+                        Text(result.detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.gray.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
