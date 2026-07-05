@@ -21,9 +21,13 @@ public struct TranscriptEvent: Codable, Sendable {
     // every existing call site and Ears implementer is unaffected, and it decodes nil
     // when absent. Used so a suggested reply follows the language actually spoken.
     public let language: String?
-    public init(text: String, speaker: String?, timestamp: Date, isFinal: Bool, language: String? = nil) {
+    // Optional audio-derived vocal features for AI coaching. Raw audio stays in the
+    // capture layer; this compact summary is enough for pacing/energy coaching.
+    public let vocalSignal: VocalSignal?
+    public init(text: String, speaker: String?, timestamp: Date, isFinal: Bool,
+                language: String? = nil, vocalSignal: VocalSignal? = nil) {
         self.text = text; self.speaker = speaker; self.timestamp = timestamp
-        self.isFinal = isFinal; self.language = language
+        self.isFinal = isFinal; self.language = language; self.vocalSignal = vocalSignal
     }
 }
 

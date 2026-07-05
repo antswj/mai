@@ -89,6 +89,16 @@ offset = 0.35                     # probability below which audio counts as sile
 silence_hangover_seconds = 4      # sustained silence before tearing the stream down (avoids flapping on pauses)
 preroll_seconds = 1.0             # pre-onset audio kept in a ring buffer and flushed so the first word is not clipped
 
+[coaching]
+# Live coaching has two layers: instant local cues and a slower AI vocal-analysis pass.
+# The AI pass does NOT upload raw audio; Mai extracts vocal features locally from the
+# PCM stream (pace, pauses, energy, rough pitch) and sends only that summary plus the
+# transcript window. It is coaching, not lie detection.
+ai_enabled = true
+ai_model = "claude-haiku-4-5"
+ai_cap_seconds = 12
+ai_min_interval_seconds = 45
+
 [echo]
 # Speaker-to-mic echo suppression: when audio plays through the speakers, the mic
 # picks it up and it would be transcribed twice (once as the real speaker from system

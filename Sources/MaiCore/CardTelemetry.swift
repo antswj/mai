@@ -24,9 +24,9 @@ public struct CardTelemetry: Identifiable, Sendable, Equatable {
         self.trigger = card.trigger
         self.firstPaintMs = card.latencyMs
         self.routeMs = card.timings["route"]
-        self.sourceLookupMs = card.timings["content"] ?? card.timings["info"] ?? card.timings["source"]
+        self.sourceLookupMs = card.timings["content"] ?? card.timings["info"] ?? card.timings["source"] ?? card.timings["ai_coach"]
         self.responseMs = card.timings["response"]
-        let values = [routeMs, sourceLookupMs, responseMs, firstPaintMs].compactMap { $0 }
+        let values = [card.timings.values.max(), firstPaintMs].compactMap { $0 }
         self.finalFillMs = values.max()
         self.qualityScore = card.rating?.score
         self.qualityGrade = card.rating?.grade
@@ -52,6 +52,7 @@ public struct CardTelemetry: Identifiable, Sendable, Equatable {
         case .screen:
             return sourceProvider(card) ?? "Screen"
         case .coaching:
+            if card.trust.contains(where: { $0.label == "AI review" }) { return "AI Voice Coach" }
             return "Local Coach"
         case .sessionOperator:
             return "Local Operator"

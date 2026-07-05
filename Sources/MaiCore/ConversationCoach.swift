@@ -19,6 +19,8 @@ public struct CoachingInsight: Sendable, Equatable {
 }
 
 public enum ConversationCoach {
+    private enum CoachingAIError: Error { case noInsight }
+
     public static func insight(for event: TranscriptEvent, window: String) -> CoachingInsight? {
         guard event.isFinal else { return nil }
         let text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,6 +73,68 @@ public enum ConversationCoach {
         return nil
     }
 
+    public static func aiInsight(for event: TranscriptEvent, window: String, llm: LLMProvider,
+                                 model: String, interfaceLanguage: Language) async throws -> CoachingInsight? {
+        guard event.isFinal, let vocal = event.vocalSignal else { return nil }
+        let text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 8, vocal.capturedSeconds >= 0.4 else { return nil }
+
+        let speaker = event.speaker?.isEmpty == false ? event.speaker! : "the speaker"
+        let user = """
+        Interface language: \(LookupRouter.name(interfaceLanguage))
+        Speaker: \(speaker)
+        Current utterance:
+        \(text)
+
+        Vocal feature summary from local PCM analysis:
+        \(vocal.summary)
+
+        Recent transcript context:
+        \(clipped(window, max: 1800))
+
+        Return the JSON now.
+        """
+        let raw = try await llm.complete(system: aiCoachSystemPrompt, user: user, model: model)
+        guard let json = JSONExtract.decodeObject(raw),
+              bool(json["should_surface"]) == true else { return nil }
+
+        let headline = string(json["headline"]) ?? "Voice-aware coaching"
+        let recommendation = string(json["recommended_move"])
+        var info = string(json["info"]) ?? recommendation ?? ""
+        if let recommendation, !info.localizedCaseInsensitiveContains(recommendation) {
+            info = info.isEmpty ? recommendation : "\(info) \(recommendation)"
+        }
+        info = info.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard info.count >= 24 else { return nil }
+        guard !containsForbiddenInference(headline + " " + info) else { return nil }
+
+        let tier = Tier(rawValue: (string(json["tier"]) ?? "medium").lowercased()) ?? .medium
+        let score = max(0.55, min(0.92, number(json["score"]) ?? 0.74))
+        let cues = stringArray(json["observed_voice_cues"]).prefix(3).joined(separator: " | ")
+        let cueDetail = cues.isEmpty ? vocal.summary : cues
+
+        return CoachingInsight(
+            key: "ai-vocal|\(speaker)",
+            headline: headline,
+            info: info,
+            tier: tier,
+            score: score,
+            trust: [
+                TrustSignal(label: "Voice features", detail: clipped(cueDetail, max: 180), confidence: 0.74),
+                TrustSignal(label: "Transcript evidence", detail: clipped(text), confidence: 0.76),
+                TrustSignal(label: "AI review", detail: "Vocal features plus recent transcript context.", confidence: 0.70),
+                TrustSignal(label: "Safety", detail: "No lie, deception, diagnosis, or intent claim; coaching only.", confidence: 0.98)
+            ])
+    }
+
+    public static func requireAIInsight(for event: TranscriptEvent, window: String, llm: LLMProvider,
+                                        model: String, interfaceLanguage: Language) async throws -> CoachingInsight {
+        guard let insight = try await aiInsight(for: event, window: window, llm: llm,
+                                                model: model, interfaceLanguage: interfaceLanguage)
+        else { throw CoachingAIError.noInsight }
+        return insight
+    }
+
     public static func operatorChecklist(lines: [MeetingLine], cards: [RichCard], savedTitle: String? = nil) -> RichCard? {
         guard !lines.isEmpty || cards.contains(where: { !$0.suppressed }) || savedTitle != nil else { return nil }
         let actions = extractedActions(from: lines)
@@ -118,8 +182,70 @@ public enum ConversationCoach {
         "対応します", "確認します", "フォロー", "下一步", "跟进", "我会", "我们会"
     ]
 
+    private static let aiCoachSystemPrompt = """
+    You are Mai's live vocal coaching analyst. You help the user navigate a live conversation.
+
+    You receive:
+    - The current utterance.
+    - A compact vocal feature summary extracted locally from PCM audio.
+    - Recent transcript context.
+
+    Decide whether a coaching card would genuinely help right now. If yes, give one short, actionable move.
+
+    Rules:
+    - Use observable signals only: pace, pauses, vocal energy, rough pitch movement, interruption/hesitation patterns, and transcript context.
+    - Never claim someone is lying, deceptive, honest, dishonest, guilty, nervous, afraid, or hiding something.
+    - Never diagnose mental state or intent. Phrase uncertainty as "may indicate", "could be a good moment", or "observed cue".
+    - Prefer a concrete next move: ask a clarifying question, slow down, recap, invite a quieter person, confirm owner/deadline, or acknowledge friction.
+    - If the vocal signal is weak, noisy, too short, or the coaching would be generic, set should_surface=false.
+    - Output only JSON:
+      {
+        "should_surface": true,
+        "headline": "short title",
+        "info": "one to two concise sentences in the interface language",
+        "recommended_move": "one concrete sentence",
+        "tier": "medium",
+        "score": 0.74,
+        "observed_voice_cues": ["cue 1", "cue 2"]
+      }
+    """
+
     private static func containsAny(_ low: String, _ original: String, _ needles: [String]) -> Bool {
         needles.contains { low.contains($0.lowercased()) || original.contains($0) }
+    }
+
+    private static func containsForbiddenInference(_ text: String) -> Bool {
+        let low = text.lowercased()
+        return low.contains("lying")
+            || low.contains(" liar")
+            || low.contains("deceptive")
+            || low.contains("deception")
+            || low.contains("dishonest")
+            || low.contains("truthful")
+            || low.contains("guilty")
+            || low.contains("hiding something")
+    }
+
+    private static func bool(_ value: Any?) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        if let s = value as? String { return ["true", "yes", "1"].contains(s.lowercased()) }
+        return false
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        if let d = value as? Double { return d }
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let s = value as? String { return Double(s) }
+        return nil
+    }
+
+    private static func string(_ value: Any?) -> String? {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        (value as? [Any])?.compactMap { string($0) }.filter { !$0.isEmpty } ?? []
     }
 
     private static func clipped(_ text: String, max: Int = 120) -> String {

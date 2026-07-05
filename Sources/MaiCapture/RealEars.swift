@@ -43,6 +43,8 @@ public final class RealEars: Ears, @unchecked Sendable {
     // the utterance as echo.
     private let concurrencyWindow: TimeInterval = 0.6
     private let overlapRecency: TimeInterval = 2.5
+    private let micVocal: VocalSignalTracker
+    private let systemVocal: VocalSignalTracker
 
     // Filled in the capture chunk.
     private var micClient: SonioxClient?
@@ -64,6 +66,10 @@ public final class RealEars: Ears, @unchecked Sendable {
     public init(config: Config, secrets: Secrets) {
         self.config = config
         self.secrets = secrets
+        self.micVocal = VocalSignalTracker(source: .user, sampleRate: config.sttSampleRate,
+                                           speechRMSThreshold: config.echoSystemActiveRMS)
+        self.systemVocal = VocalSignalTracker(source: .remote, sampleRate: config.sttSampleRate,
+                                              speechRMSThreshold: config.echoSystemActiveRMS)
         let made = AsyncStream<TranscriptEvent>.makeStream()
         self._stream = made.stream
         self.cont = made.continuation
@@ -116,6 +122,7 @@ public final class RealEars: Ears, @unchecked Sendable {
     func feedMic(_ data: Data) {
         if muteLock.withLock({ _micMuted }) { return }   // muted: drop mic audio entirely
         noteCaptured()
+        micVocal.ingest(data)
         // Echo detection at capture time: if the mic is loud WHILE the speaker was loud
         // a moment ago, mic and speaker overlap, i.e. the mic is hearing the speakers.
         if config.echoSuppression, AudioEnergy.isLoud(data, threshold: Float(config.echoSystemActiveRMS)) {
@@ -128,6 +135,7 @@ public final class RealEars: Ears, @unchecked Sendable {
     }
     func feedSystem(_ data: Data) {
         noteCaptured()
+        systemVocal.ingest(data)
         // "The speaker is playing" comes from the raw system-audio energy at capture,
         // not the downstream VAD flag (which has gaps during reconnects and offset lag).
         if AudioEnergy.isLoud(data, threshold: Float(config.echoSystemActiveRMS)) {
@@ -204,10 +212,11 @@ public final class RealEars: Ears, @unchecked Sendable {
 
     private func deliverFinal(_ segment: SonioxSegment, source: SpeakerSource, at now: Date) {
         let speaker = resolveName(source: source, cluster: segment.speakerLabel)
+        let vocal = (source == .user ? micVocal : systemVocal).snapshot(at: now, utteranceText: segment.text)
         // Carry Soniox's per-utterance detected language into the engine so a suggested
         // reply follows the language actually spoken, not the floor config.
         let event = TranscriptEvent(text: segment.text, speaker: speaker, timestamp: now,
-                                    isFinal: true, language: segment.language)
+                                    isFinal: true, language: segment.language, vocalSignal: vocal)
         cont.yield(event)
         let lang = segment.language.flatMap { Language(rawValue: $0) }
         // The translation line is shown only when it differs from the original (when the

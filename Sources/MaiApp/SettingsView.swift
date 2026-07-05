@@ -54,6 +54,8 @@ struct SettingsView: View {
 
             Section("Mission Mode") {
                 Toggle("Keep the HUD pinned open", isOn: $model.missionPinned)
+                Toggle("AI voice coaching", isOn: Binding(get: { model.config.coachingAIEnabled },
+                                                          set: { v in model.updateConfig { $0.coachingAIEnabled = v } }))
                 LabeledContent("Summon shortcut") { HotkeyRecorder() }
                 Text("A global shortcut that brings up Mission mode and focuses the ask field from any app.")
                     .font(.caption).foregroundStyle(.secondary)

@@ -7,7 +7,7 @@ import Foundation
 // name, fall back to the diarization label, and a manual rename always wins.
 // Pure value type so the owning actor never races it; fully testable.
 
-public enum SpeakerSource: String, Sendable {
+public enum SpeakerSource: String, Sendable, Codable, Equatable {
     case user     // microphone
     case remote   // system audio
 }

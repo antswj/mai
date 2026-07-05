@@ -57,6 +57,12 @@ public struct Config: Sendable {
     public var vadPrerollSeconds: Double
     public var vadOnset: Double
     public var vadOffset: Double
+    // Live coaching. The fast local coach stays instant; the AI coach is allowed to
+    // take longer and uses vocal features extracted from real audio.
+    public var coachingAIEnabled: Bool
+    public var coachingAIModel: String
+    public var coachingAICapSeconds: Double
+    public var coachingAIMinIntervalSeconds: Double
     // Echo suppression (mic picking up speaker output). hold = how long a mic final is
     // held when system audio is active, so a matching system final can be compared
     // regardless of which stream finalizes first.
@@ -115,6 +121,10 @@ public struct Config: Sendable {
         vadPrerollSeconds: Double = 1.0,
         vadOnset: Double = 0.5,
         vadOffset: Double = 0.35,
+        coachingAIEnabled: Bool = true,
+        coachingAIModel: String = "claude-haiku-4-5",
+        coachingAICapSeconds: Double = 12,
+        coachingAIMinIntervalSeconds: Double = 45,
         echoSuppression: Bool = true,
         echoSystemActiveRMS: Double = 0.015
     ) {
@@ -142,6 +152,10 @@ public struct Config: Sendable {
         self.vadEnabled = vadEnabled; self.vadEngine = vadEngine
         self.vadSilenceHangoverSeconds = vadSilenceHangoverSeconds; self.vadPrerollSeconds = vadPrerollSeconds
         self.vadOnset = vadOnset; self.vadOffset = vadOffset
+        self.coachingAIEnabled = coachingAIEnabled
+        self.coachingAIModel = coachingAIModel
+        self.coachingAICapSeconds = coachingAICapSeconds
+        self.coachingAIMinIntervalSeconds = coachingAIMinIntervalSeconds
         self.echoSuppression = echoSuppression
         self.echoSystemActiveRMS = echoSystemActiveRMS
     }
@@ -208,6 +222,10 @@ public struct Config: Sendable {
         if let v = dbl("vad", "preroll_seconds") { c.vadPrerollSeconds = v }
         if let v = dbl("vad", "onset") { c.vadOnset = v }
         if let v = dbl("vad", "offset") { c.vadOffset = v }
+        if let v = bln("coaching", "ai_enabled") { c.coachingAIEnabled = v }
+        if let v = str("coaching", "ai_model") { c.coachingAIModel = v }
+        if let v = dbl("coaching", "ai_cap_seconds") { c.coachingAICapSeconds = v }
+        if let v = dbl("coaching", "ai_min_interval_seconds") { c.coachingAIMinIntervalSeconds = v }
         if let v = bln("echo", "suppression") { c.echoSuppression = v }
         if let v = dbl("echo", "system_active_rms") { c.echoSystemActiveRMS = v }
         return c

@@ -64,6 +64,24 @@ func makeFloatBuffer(sampleRate: Double = 48000, channels: AVAudioChannelCount =
     return buf
 }
 
+func pcm16(_ samples: [Int16]) -> Data {
+    var d = Data(capacity: samples.count * 2)
+    for s in samples {
+        var le = s.littleEndian
+        withUnsafeBytes(of: &le) { d.append(contentsOf: $0) }
+    }
+    return d
+}
+
+func sinePCM16(sampleRate: Int = 16000, seconds: Double, hz: Double = 180, amplitude: Double = 0.45) -> Data {
+    let count = Int(Double(sampleRate) * seconds)
+    let samples = (0..<count).map { i -> Int16 in
+        let value = sin(Double(i) / Double(sampleRate) * hz * 2 * Double.pi) * amplitude
+        return Int16(max(-1, min(1, value)) * 32767)
+    }
+    return pcm16(samples)
+}
+
 // 1) Mixed-language nearest sushi
 section("Example 1: mixed-language nearest sushi (real-shape lookup via stub)")
 do {
@@ -430,6 +448,38 @@ do {
           "coaching explicitly avoids lie/deception claims")
 }
 
+section("AI voice coaching: uses vocal features and rejects deception claims")
+do {
+    let vocal = VocalSignal(source: .remote, capturedAt: Date(), windowSeconds: 12,
+                            capturedSeconds: 4, speechSeconds: 2.3, silenceRatio: 0.42,
+                            meanRMS: 0.08, peakRMS: 0.31, energyTrend: -0.04,
+                            meanPitchHz: 172, pitchStdDevHz: 26, pitchSampleCount: 8,
+                            wordCount: 12, estimatedWordsPerMinute: 205)
+    let event = TranscriptEvent(text: "The pricing change might be difficult for procurement.",
+                                speaker: "Mia", timestamp: Date(), isFinal: true,
+                                vocalSignal: vocal)
+    let insight = try? await ConversationCoach.aiInsight(
+        for: event,
+        window: "Mia: The pricing change might be difficult for procurement.",
+        llm: StubLLM(),
+        model: "stub",
+        interfaceLanguage: .en)
+    check(insight?.headline == "Adjust the pace", "AI coach produces a voice-aware coaching insight")
+    check(insight?.trust.contains { $0.label == "Voice features" } == true,
+          "AI coach trust includes vocal features")
+
+    let unsafe = StubLLM { _, _, _ in
+        #"{"should_surface":true,"headline":"They are lying","info":"The speaker is lying based on their tone.","recommended_move":"Confront them.","tier":"critical","score":0.9,"observed_voice_cues":["tone"]}"#
+    }
+    let unsafeInsight = try? await ConversationCoach.aiInsight(
+        for: event,
+        window: "Mia: The pricing change might be difficult for procurement.",
+        llm: unsafe,
+        model: "stub",
+        interfaceLanguage: .en)
+    check(unsafeInsight == nil, "AI coach suppresses lie/deception claims")
+}
+
 section("End-of-session operator: produces next-action checklist")
 do {
     let lines = [
@@ -539,6 +589,29 @@ func waitForCard(_ sink: CollectingRichSink, timeoutMs: Int = 7000,
         try? await Task.sleep(nanoseconds: 10_000_000)
     }
     return sink.all.first(where: predicate)
+}
+
+section("Engine: AI voice coaching surfaces from vocal signal asynchronously")
+do {
+    var config = Config()
+    config.coachingAIEnabled = true
+    config.coachingAICapSeconds = 2
+    config.coachingAIMinIntervalSeconds = 10
+    let rig = makeRichRig(config)
+    let vocal = VocalSignal(source: .remote, capturedAt: Date(), windowSeconds: 12,
+                            capturedSeconds: 4.5, speechSeconds: 2.1, silenceRatio: 0.53,
+                            meanRMS: 0.07, peakRMS: 0.29, energyTrend: -0.03,
+                            meanPitchHz: 181, pitchStdDevHz: 31, pitchSampleCount: 6,
+                            wordCount: 10, estimatedWordsPerMinute: 286)
+    let event = TranscriptEvent(text: "The rollout date is possible, but procurement may push back.",
+                                speaker: "Mia", timestamp: Date(), isFinal: true,
+                                vocalSignal: vocal)
+    await rig.engine.process(.transcript(event))
+    let card = await waitForCard(rig.sink, timeoutMs: 1500) {
+        $0.route == .coaching && $0.trust.map(\.label).contains("AI review")
+    }
+    check(card?.headline == "Adjust the pace", "AI voice coaching card surfaced through the engine")
+    check(card?.telemetry.provider == "AI Voice Coach", "telemetry labels AI voice coaching")
 }
 
 section("Trivial answers: local, exact, conservative")
@@ -1336,6 +1409,21 @@ do {
     check(AudioEnergy.isLoud(loud, threshold: 0.015), "loud audio is above the speaker-active threshold")
     check(!AudioEnergy.isLoud(pcm((0..<512).map { _ in Int16(100) }), threshold: 0.015), "very quiet audio is not 'playing'")
     check(AudioEnergy.rms(Data()) == 0, "empty buffer is zero, not a crash")
+}
+
+section("Vocal signal tracker: extracts pause, energy, pitch, and pace from PCM")
+do {
+    let t0 = Date(timeIntervalSince1970: 1_780_000_100)
+    let tracker = VocalSignalTracker(source: .remote, sampleRate: 16000, speechRMSThreshold: 0.015)
+    tracker.ingest(sinePCM16(seconds: 1.0, hz: 180, amplitude: 0.45), at: t0.addingTimeInterval(1.0))
+    tracker.ingest(pcm16([Int16](repeating: 0, count: 16_000)), at: t0.addingTimeInterval(2.0))
+    let signal = tracker.snapshot(at: t0.addingTimeInterval(2.0), windowSeconds: 2.0,
+                                  utteranceText: "this is a concise test utterance")
+    check((signal?.speechSeconds ?? 0) > 0.9, "vocal tracker measures speech seconds from PCM")
+    check((signal?.silenceRatio ?? 0) > 0.35, "vocal tracker measures pause ratio")
+    check((signal?.meanPitchHz ?? 0) > 120 && (signal?.meanPitchHz ?? 999) < 240,
+          "vocal tracker estimates pitch from audio")
+    check(signal?.estimatedWordsPerMinute != nil, "vocal tracker estimates speaking pace")
 }
 
 section("Echo suppression: drops mic echo of system audio, keeps genuine user speech")

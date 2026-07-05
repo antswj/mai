@@ -25,6 +25,7 @@ public struct StubLLM: LLMProvider {
         if system.contains("lookup router") { return route(user) }
         if system.contains("Mai's explainer") { return explain(user) }
         if system.contains("Mai's responder") { return respond(user) }
+        if system.contains("live vocal coaching analyst") { return vocalCoach(user) }
         if system.contains("meeting assistant") { return assistantReply(user) }
         if system.contains("meeting notes writer") { return notesWriter(user) }
         if system.contains("notes verifier") { return notesVerify(user) }
@@ -78,6 +79,22 @@ public struct StubLLM: LLMProvider {
         return object(["warranted": true, "spoken": "Let me check and get back to you shortly.",
                        "translation": "Let me check and get back to you shortly.",
                        "rationale": "You were asked for input."])
+    }
+
+    private static func vocalCoach(_ user: String) -> String {
+        let low = user.lowercased()
+        if low.contains("pause_ratio=0.00") && low.contains("energy_trend=0.00") {
+            return object(["should_surface": false])
+        }
+        return object([
+            "should_surface": true,
+            "headline": "Adjust the pace",
+            "info": "The vocal pattern suggests this is a good moment to slow down and check alignment before moving on.",
+            "recommended_move": "Ask one clarifying question and pause for the answer.",
+            "tier": "medium",
+            "score": 0.76,
+            "observed_voice_cues": ["pause/energy pattern changed", "pace may be compressed"]
+        ])
     }
 
     private static func classify(_ window: String) -> String {

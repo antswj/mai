@@ -40,6 +40,7 @@ public actor Engine {
     private let store: MemoryStore
     private let verbatim: VerbatimLog
     private let face: Face
+    private let llm: LLMProvider
 
     private let classifier: Classifier
     private let dispatcher: Dispatcher
@@ -86,6 +87,7 @@ public actor Engine {
         self.store = store
         self.verbatim = verbatim
         self.face = face
+        self.llm = llm
         self.richSink = richSink
         self.context = RollingContext(maxTurns: config.maxTurns, maxSeconds: config.maxSeconds)
         self.classifier = Classifier(llm: llm, model: config.classifierModel,
@@ -374,13 +376,54 @@ public actor Engine {
 
     private func maybeSurfaceCoaching(event: TranscriptEvent, window: String, t0: Date) {
         guard richSink != nil, !chatOpen else { return }
-        guard let insight = ConversationCoach.insight(for: event, window: window) else { return }
-        if let last = recentCoaching[insight.key], event.timestamp.timeIntervalSince(last) < 90 { return }
-        recentCoaching[insight.key] = event.timestamp
+        if let insight = ConversationCoach.insight(for: event, window: window) {
+            if recentCoaching[insight.key].map({ event.timestamp.timeIntervalSince($0) >= 90 }) ?? true {
+                recentCoaching[insight.key] = event.timestamp
+                surfaceCoaching(insight, event: event, t0: t0)
+            }
+        }
+        scheduleAICoaching(event: event, window: window, t0: t0)
+    }
+
+    private func scheduleAICoaching(event: TranscriptEvent, window: String, t0: Date) {
+        guard config.coachingAIEnabled,
+              let vocal = event.vocalSignal,
+              vocal.capturedSeconds >= 0.4,
+              vocal.speechSeconds >= 0.2 else { return }
+        let speaker = event.speaker?.isEmpty == false ? event.speaker! : "speaker"
+        let key = "ai-vocal|\(speaker)"
+        let interval = max(10, config.coachingAIMinIntervalSeconds)
+        if let last = recentCoaching[key], event.timestamp.timeIntervalSince(last) < interval { return }
+        recentCoaching[key] = event.timestamp
+        Task { [event, window, t0] in
+            await self.surfaceAICoaching(event: event, window: window, t0: t0)
+        }
+    }
+
+    private func surfaceAICoaching(event: TranscriptEvent, window: String, t0: Date) async {
+        guard richSink != nil, !chatOpen else { return }
+        let started = Date()
+        let cap = max(2, config.coachingAICapSeconds)
+        let model = config.coachingAIModel.isEmpty ? config.lookupRouterModel : config.coachingAIModel
+        guard let insight = await withTimeoutOrNil(seconds: cap, { [llm, config] in
+            try await ConversationCoach.requireAIInsight(
+                for: event, window: window, llm: llm, model: model,
+                interfaceLanguage: config.interfaceLanguage)
+        }) else { return }
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        surfaceCoaching(insight, event: event, t0: t0,
+                        note: "AI voice coaching",
+                        timings: ["ai_coach": elapsed])
+    }
+
+    private func surfaceCoaching(_ insight: CoachingInsight, event: TranscriptEvent, t0: Date,
+                                 note: String? = nil, timings: [String: Int] = [:]) {
         var card = RichCard(trigger: .intent, timestamp: event.timestamp, route: .coaching,
                             tier: insight.tier, score: insight.score, headline: insight.headline,
                             info: insight.info, pending: [],
+                            timings: timings,
                             latencyMs: Int(Date().timeIntervalSince(t0) * 1000),
+                            note: note,
                             trust: insight.trust)
         card.rating = CardRating.evaluate(card)
         richSink?.upsert(card)
