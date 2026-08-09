@@ -203,31 +203,6 @@ action button when there is one (for example "Open in Maps"), and an optional
 suggested reply when the **Reply** toggle is on. Closing the window returns Mai to the
 top-right HUD; the transcript, cards, and notes are continuous across both.
 
-## Ship Mai to someone else
-
-`make-app.sh` already signs with your Developer ID and the hardened runtime, so the
-app opens cleanly on your own Mac. To produce a disk image and (when you are ready)
-notarize it so it opens on anyone's Mac:
-
-```
-./release.sh        # builds + signs Mai.app, then packages a signed Mai.dmg
-```
-
-The `.dmg` opens cleanly on your Mac. On someone else's Mac it shows a Gatekeeper
-warning until it is notarized. When you are ready to share it, notarize once:
-
-```
-./notarize.sh       # notarizes and staples the app and the dmg
-```
-
-`notarize.sh` documents the one-time setup in plain English at the top: turn on
-two-factor for your Apple Account, generate an **app-specific password** at
-account.apple.com (this is not your Apple ID password), and store it once with
-`xcrun notarytool store-credentials "MaiNotary" ...`. After that, each release is
-`./release.sh` then `./notarize.sh`. The script verifies the result with
-`stapler validate` and `spctl`; you can also run `syspolicy_check distribution Mai.app`
-as the authoritative Gatekeeper check on macOS 14+.
-
 ## Run unbundled (dev mode, no capture)
 
 ```
