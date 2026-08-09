@@ -1,0 +1,7 @@
+# Sanitized showcase script for documentation screenshots. Both people and the whole
+# conversation are fictional.
+Bryan: Have you watched Spider-Man Brand New Day?
+Anthony: Not yet. Who directed Spider-Man Brand New Day, and what is it about?
+Bryan: I only know the reviews have been strong so far.
+Anthony: Which cinema near us is the closest one showing it?
+Bryan: Let us pick that one and go tonight.

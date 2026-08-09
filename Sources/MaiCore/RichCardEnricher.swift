@@ -190,13 +190,51 @@ public actor RichCardEnricher {
             // Both go to grounded web search first; the model is the fallback only when
             // search returns nothing. (Technical no longer short-circuits to the model.)
             let grounded = await groundedContent(query: plan.query, route: plan.route)
-            if grounded.info != nil { return grounded }
+            if grounded.info != nil {
+                // Grounded search returns no images, so a card about a NAMED thing (a
+                // film, an album, a product) used to arrive pictureless even when the
+                // encyclopedia has a real one. Borrow just the picture, keeping the fresh
+                // answer and its sources. Nothing is invented: the image is the one on the
+                // entity's own article, or there is none.
+                return await withEntityImage(grounded, plan: plan, topic: topic)
+            }
+            // Before the model's own memory, try the encyclopedia. The model's knowledge is
+            // frozen at training time, so for anything recent it answers confidently and
+            // wrongly (calling a released film an unmade comic storyline). A real article
+            // beats stale recall every time.
+            if let fromEntity = await entityOutcome(plan: plan, topic: topic) { return fromEntity }
             return await explainContent(topic: topic, window: window)
         default:
             let grounded = await groundedContent(query: plan.query, route: plan.route)
-            if grounded.info != nil { return grounded }
+            if grounded.info != nil { return await withEntityImage(grounded, plan: plan, topic: topic) }
+            if let fromEntity = await entityOutcome(plan: plan, topic: topic) { return fromEntity }
             return await explainContent(topic: topic, window: window)
         }
+    }
+
+    /// The encyclopedia lookup as a reusable outcome, so every knowledge route can reach a
+    /// real sourced article (and its picture) instead of only the entity route.
+    private nonisolated func entityOutcome(plan: LookupPlan, topic: String) async -> ContentOutcome? {
+        let term = (plan.entity ?? topic).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return nil }
+        let found: EntityResult? = (await withTimeoutOrNil(seconds: config.onlineCapSeconds) { [entity, interface] in
+            try await entity.lookup(term: term, spoken: plan.spoken, interface: interface)
+        }) ?? nil
+        guard let r = found, !(r.summary ?? "").isEmpty else { return nil }
+        let src = RichSource(title: r.sourceTitle, url: r.sourceURL)
+        return ContentOutcome(info: r.summary, image: r.imageURL, source: src,
+                              html: nil, action: nil, sources: [src])
+    }
+
+    /// Keep a grounded answer and its sources, but give the card the entity's real picture
+    /// when it has none. Only the image is borrowed.
+    private nonisolated func withEntityImage(_ outcome: ContentOutcome, plan: LookupPlan,
+                                             topic: String) async -> ContentOutcome {
+        guard outcome.image == nil,
+              let picture = await entityOutcome(plan: plan, topic: topic)?.image else { return outcome }
+        return ContentOutcome(info: outcome.info, image: picture, source: outcome.source,
+                              html: outcome.html, action: outcome.action, sources: outcome.sources,
+                              response: outcome.response, unverified: outcome.unverified)
     }
 
     // Last-resort content: the model's own general knowledge, no web, no source. Marked

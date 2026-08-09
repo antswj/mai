@@ -54,6 +54,35 @@ short topic in payload.query.
   EN: "how do you make pudding", "what's the capital of Laos", "I'm going to Malaysia"
   JA: "プリンってどうやって作るの", "マレーシアに行くんだ"
   ZH: "布丁怎么做", "我要去马来西亚了"
+
+A NAMED WORK OR THING counts. When someone asks what a specific film, show, book,
+game, album, team, company, or product IS, who made it, or what it is about, that is
+a real question: fire "question" with payload.query set to the NAME exactly as said.
+These resolve to a sourced card with a picture, which is often the most useful card
+in the conversation. Do not skip it just because the answer seems commonly known.
+  EN: "what is Spider-Man Brand New Day about", "who directed Dune", "have you watched Shogun"
+  JA: "君の名は。ってどんな映画", "スパイダーマンの新作見た？"
+  ZH: "沙丘讲的是什么", "你看过奥本海默吗"
+
+TIME-SENSITIVE FACTS. "What time is it showing / when does it open / is it on today"
+is a question whose answer changes by the day, so it needs a looked-up answer, not
+just a venue. Fire "question" for it with payload.query carrying the thing AND the
+timing (for example "Spider-Man Brand New Day showtimes today Funabashi").
+  EN: "what time is it showing today", "when does that place open", "is the exhibition on this week"
+  JA: "今日は何時からやってる？", "あの店は何時に開く？"
+  ZH: "今天几点场", "那家店几点开门"
+
+ASKING WHICH PLACE IS STILL A PLACE TRIGGER. A line that asks WHERE to go, WHICH
+venue, or which one is closest is a "place" trigger, even though it is phrased as a
+question and even when it names a film, dish, or event. Never downgrade it to
+"question" only: without the place trigger there is no nearby result at all.
+  EN: "which cinema near us is showing it", "where should we eat", "what's the closest one"
+  JA: "近くでやってる映画館はどこ？", "一番近いのはどこ？"
+  ZH: "附近哪家影院在放", "最近的是哪家"
+When ONE line asks both where to go AND something time-sensitive or factual, fire
+BOTH triggers: a "place" trigger for the venue and a "question" trigger for the rest.
+They produce different, complementary cards.
+
 Do NOT fire for rhetorical questions, vague musings, or things already answered in
 the window.
 

@@ -1,0 +1,10 @@
+# Sanitized showcase script for documentation screenshots. Every name and detail is
+# fictional; nothing here comes from a real conversation.
+佐藤: おはようございます。今日は第三四半期の振り返りから始めましょう。
+田中: よろしくお願いします。売上は前年比で伸びています。
+[SCREEN] スライド1：第三四半期の売上概要
+佐藤: 数字は概ね順調ですね。
+田中: ただ、来期のスケジュールには少し懸念があります。
+佐藤: なるほど。あとでお寿司でも食べながら話しましょう。
+佐藤: ご意見をお願いできますか。
+田中: はい、もちろんです。

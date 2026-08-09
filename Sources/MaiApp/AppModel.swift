@@ -191,7 +191,7 @@ final class AppModel: ObservableObject {
         self.notes = NotesStore(llm: baseLLM, model: config.drafterModel,
                                 interface: config.interfaceLanguage, policy: config.piiPolicy)
         self.assistant = AnthropicAssistant(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
-        self.translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
+        self.translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage, llm: baseLLM, model: config.drafterModel)
 
         self.notesFolder = Self.resolveNotesFolder()
         refreshKeyPresence()
@@ -767,10 +767,15 @@ final class AppModel: ObservableObject {
     // Soniox stream reconnects with or without the translation block (the VAD reconnect
     // and pre-roll handle the switch without clipping). Translation rides the same stream
     // so it is as instant as the transcript, and never appears in the cards.
+    // A metered LLM for the seams that need one outside init (translation, assistant).
+    private func makeBaseLLM() -> LLMProvider {
+        MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: usage)
+    }
+
     func toggleTranslation() {
         translationOn.toggle()
         config.sttTranslation = translationOn
-        translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
+        translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage, llm: makeBaseLLM(), model: config.drafterModel)
         rebuildSessionPreservingPause()
         status = translationOn ? "Translation on (\(config.interfaceLanguage.rawValue))." : "Translation off."
     }
@@ -789,7 +794,7 @@ final class AppModel: ObservableObject {
         var c = config; mutate(&c); config = c
         responseEnabled = c.responseEnabled
         showSuppressed = c.showSuppressedLog
-        translation = TranslationFactory.make(engine: c.translationEngine, target: c.interfaceLanguage)
+        translation = TranslationFactory.make(engine: c.translationEngine, target: c.interfaceLanguage, llm: makeBaseLLM(), model: c.drafterModel)
         refreshDependentProviders()
         rebuildSessionPreservingPause()
     }
@@ -1116,12 +1121,17 @@ final class AppModel: ObservableObject {
         guard !text.isEmpty else { return }
         lastActivityAt = Date()
         simEars?.injectLine(text, speaker: speaker)
-        // Show the typed line in the transcript too, attributed to the user.
+        // Show the typed line in the transcript too. The language comes from the SCRIPT,
+        // not the floor config: a typed English line in a Japanese-floor session is
+        // English, and tagging it otherwise breaks the reading aids and the translation.
         let line = LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You", source: .user,
-                                      text: text, language: config.floorLanguage, isFinal: true)
+                                      text: text, language: ScriptDetect.language(of: text), isFinal: true)
         liveLines.append(line)
         if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
         recordSessionLine(line)
+        // Same treatment as a real finalized line, so the dev path exercises translation
+        // instead of silently skipping it.
+        translateLineIfNeeded(line)
     }
 
     func injectScreen(_ text: String) {
@@ -1160,6 +1170,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Set MAI_DEMO_FIXTURE to a fixture file name to replay it right after launch in
+    /// simulated mode. Used for documentation screenshots and for demoing without a
+    /// microphone; it is inert unless the variable is set.
+    func loadDemoFixtureIfRequested() {
+        guard let name = ProcessInfo.processInfo.environment["MAI_DEMO_FIXTURE"],
+              !name.isEmpty, useSimulated else { return }
+        if ProcessInfo.processInfo.environment["MAI_DEMO_REPLY"] == "1", !responseEnabled {
+            toggleResponse()
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the session finish starting
+            self.loadFixture(name)
+        }
+    }
+
     func loadFixture(_ name: String) {
         guard useSimulated else {
             status = "Fixtures replay in simulated mode only."; return
@@ -1176,7 +1201,6 @@ final class AppModel: ObservableObject {
         status = "Replaying \(name)..."
         let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).map(String.init)
         let ears = simEars, eyes = simEyes
-        let floor = config.floorLanguage
         Task { [weak self] in
             for line in lines {
                 let t = line.trimmingCharacters(in: .whitespaces)
@@ -1190,10 +1214,14 @@ final class AppModel: ObservableObject {
                     await MainActor.run {
                         guard let self else { return }
                         self.lastActivityAt = Date()
+                        // Language from the SCRIPT, not the floor config, so an English
+                        // line in a Japanese-floor session is tagged English.
                         let l = LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You",
-                                                   source: .user, text: body, language: floor, isFinal: true)
+                                                   source: .user, text: body,
+                                                   language: ScriptDetect.language(of: body), isFinal: true)
                         self.liveLines.append(l)
                         self.recordSessionLine(l)
+                        self.translateLineIfNeeded(l)
                     }
                 }
                 try? await Task.sleep(nanoseconds: 60_000_000)

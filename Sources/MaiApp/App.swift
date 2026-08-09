@@ -97,7 +97,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Opening Mai.app should always produce a visible affordance. After onboarding
         // the app can still rest as a menu bar agent when the window is closed, but a
         // fresh launch or Finder reopen should not look like "nothing happened".
-        openMain()
+        // MAI_DEMO_HUD=1 shows only Mission mode (the HUD), with the main window closed,
+        // which is what the documentation screenshots are of.
+        if ProcessInfo.processInfo.environment["MAI_DEMO_HUD"] == "1" {
+            model.missionPinned = true
+        } else {
+            openMain()
+        }
+        model.loadDemoFixtureIfRequested()
     }
 
     // Quitting is a normal way a session ends for a menu bar agent, so the transcript is
