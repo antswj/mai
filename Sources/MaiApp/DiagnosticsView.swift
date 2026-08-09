@@ -280,6 +280,28 @@ struct ProviderHealthView: View {
                 .disabled(model.providerHealthRunning)
             }
 
+            // Capture health sits above the provider list because a healthy set of API
+            // keys says nothing about whether audio is actually reaching transcription.
+            if let note = model.captureHealthNote {
+                HStack(alignment: .top, spacing: 8) {
+                    // A fault warns; an informational notice (a normal quiet stretch) stays
+                    // neutral, so a healthy machine never shows an alarm colour.
+                    Image(systemName: model.captureHealthIsFault ? "exclamationmark.triangle.fill" : "info.circle")
+                        .foregroundStyle(model.captureHealthIsFault ? Color.orange : Color.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Capture").font(.system(.body, weight: .semibold))
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                        if let detail = model.captureHealthDetail {
+                            Text(detail).font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(model.captureHealthIsFault ? Color.orange.opacity(0.10) : Color.secondary.opacity(0.08)))
+            }
+
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(model.providerHealth) { result in

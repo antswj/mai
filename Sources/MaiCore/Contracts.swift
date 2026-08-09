@@ -24,10 +24,17 @@ public struct TranscriptEvent: Codable, Sendable {
     // Optional audio-derived vocal features for AI coaching. Raw audio stays in the
     // capture layer; this compact summary is enough for pacing/energy coaching.
     public let vocalSignal: VocalSignal?
+    // Which side of the conversation spoke: the microphone (the user) or system audio
+    // (the other party). Same additive-optional pattern as language and vocalSignal, so
+    // every existing Ears implementer stays source-compatible. The coach needs it to
+    // suggest what to say back to THEM without ever coaching the user on their own words.
+    public let source: SpeakerSource?
     public init(text: String, speaker: String?, timestamp: Date, isFinal: Bool,
-                language: String? = nil, vocalSignal: VocalSignal? = nil) {
+                language: String? = nil, vocalSignal: VocalSignal? = nil,
+                source: SpeakerSource? = nil) {
         self.text = text; self.speaker = speaker; self.timestamp = timestamp
         self.isFinal = isFinal; self.language = language; self.vocalSignal = vocalSignal
+        self.source = source
     }
 }
 

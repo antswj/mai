@@ -4,7 +4,7 @@ import Foundation
 
 @Suite struct NotesStoreTests {
     @Test func stopWithResultReportsSaveFailure() async throws {
-        let store = NotesStore(llm: StubLLM(), model: "claude-sonnet-4-6", interface: .en)
+        let store = NotesStore(llm: StubLLM(), model: "stub", interface: .en)
         let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         await store.start(now: t0)
         await store.add(MeetingLine(speaker: "Sato", isUser: false,

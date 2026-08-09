@@ -442,7 +442,8 @@ do {
     let insight = ConversationCoach.insight(
         for: TranscriptEvent(text: "I'm worried the timeline risk is still too high.",
                              speaker: "Mia", timestamp: Date(), isFinal: true),
-        window: "Mia: I'm worried the timeline risk is still too high.")
+        window: "Mia: I'm worried the timeline risk is still too high.",
+        interfaceLanguage: .en)
     check(insight?.headline == "Address the concern", "concern cue produces a coaching insight")
     check(insight?.trust.contains { $0.detail.localizedCaseInsensitiveContains("not deception") } == true,
           "coaching explicitly avoids lie/deception claims")
@@ -463,7 +464,9 @@ do {
         window: "Mia: The pricing change might be difficult for procurement.",
         llm: StubLLM(),
         model: "stub",
-        interfaceLanguage: .en)
+        interfaceLanguage: .en,
+        spokenLanguage: .en,
+        suggestReplies: false)
     check(insight?.headline == "Adjust the pace", "AI coach produces a voice-aware coaching insight")
     check(insight?.trust.contains { $0.label == "Framework" && $0.detail.contains("Motivational") } == true,
           "AI coach names the psychology framework behind the move")
@@ -478,19 +481,29 @@ do {
         window: "Mia: The pricing change might be difficult for procurement.",
         llm: unsafe,
         model: "stub",
-        interfaceLanguage: .en)
+        interfaceLanguage: .en,
+        spokenLanguage: .en,
+        suggestReplies: false)
     check(unsafeInsight == nil, "AI coach suppresses lie/deception claims")
 }
 
 section("End-of-session operator: produces next-action checklist")
 do {
+    let t0 = Date(timeIntervalSince1970: 1_780_000_000)
     let lines = [
-        MeetingLine(speaker: "Mia", isUser: false, text: "We should follow up with Ken by Friday.", timestamp: Date()),
-        MeetingLine(speaker: "Lee", isUser: true, text: "What is still blocking the rollout?", timestamp: Date())
+        MeetingLine(speaker: "Mia", isUser: false, text: "We decided to go with the phased launch.", timestamp: t0),
+        MeetingLine(speaker: "Mia", isUser: false, text: "We should follow up with Ken by Friday.", timestamp: t0.addingTimeInterval(60)),
+        MeetingLine(speaker: "Lee", isUser: true, text: "What is still blocking the rollout?", timestamp: t0.addingTimeInterval(120))
     ]
-    let card = ConversationCoach.operatorChecklist(lines: lines, cards: [], savedTitle: "Team Sync Notes")
+    let useful = RichCard(trigger: .question, timestamp: t0, route: .fresh, tier: .medium, score: 0.8,
+                          headline: "Rollout plan", info: "A useful sourced answer.", source: RichSource(title: "Plan", url: "https://example.com/plan"),
+                          pending: [], rating: CardRating(score: 0.8, grade: "good", reasons: ["sourced"], useful: true))
+    let card = ConversationCoach.operatorChecklist(lines: lines, cards: [useful], savedTitle: "Team Sync Notes")
     check(card?.route == .sessionOperator, "operator card route is sessionOperator")
     check(card?.info?.localizedCaseInsensitiveContains("follow") == true, "operator card includes follow-up guidance")
+    check(card?.info?.contains("Decisions") == true, "operator recap includes a decisions section")
+    check(card?.info?.contains("Replay Points") == true, "operator recap includes replay points")
+    check(card?.sources.first?.url == "https://example.com/plan", "operator recap carries useful links as sources")
     check(card?.trust.isEmpty == false, "operator card carries trust signals")
 }
 
@@ -634,7 +647,7 @@ do {
 
 section("Router: route selection + multilingual entity extraction")
 do {
-    let router = LookupRouter(llm: StubLLM(), model: "claude-haiku-4-5", interface: .en)
+    let router = LookupRouter(llm: StubLLM(), model: "stub", interface: .en)
     let trivial = await router.plan(topic: "what's 15% of 80", window: "", spoken: .en)
     check(trivial.route == .trivial && trivial.trivialAnswer == "12", "trivial decided locally, no model")
     let entity = await router.plan(topic: "Malaysia", window: "", spoken: .en)
@@ -1168,7 +1181,7 @@ do {
 
 section("Assistant reply: identifies what the user said (via the injected transcript)")
 do {
-    let assistant = AnthropicAssistant(llm: StubLLM(), model: "claude-haiku-4-5", interface: .en)
+    let assistant = AnthropicAssistant(llm: StubLLM(), model: "stub", interface: .en)
     let transcript = [MeetingLine(speaker: "Sato", isUser: false, text: "Shall we ship Friday?", timestamp: Date()),
                       MeetingLine(speaker: "You", isUser: true, text: "I need one more day to test.", timestamp: Date())]
     let reply = try await assistant.reply(to: "what are they talking about", transcript: transcript, history: [], screen: nil)
@@ -1177,7 +1190,7 @@ do {
 
 section("Notes pipeline: write-up, verification drops unsupported, title, save")
 do {
-    let store = NotesStore(llm: StubLLM(), model: "claude-sonnet-4-6", interface: .en)
+    let store = NotesStore(llm: StubLLM(), model: "stub", interface: .en)
     await store.start(now: Date(timeIntervalSince1970: 1_700_000_000))
     let t = Date(timeIntervalSince1970: 1_700_000_000)
     await store.add(MeetingLine(speaker: "Sato", isUser: false, text: "Let us finalize the launch checklist today.", timestamp: t))
@@ -1308,7 +1321,7 @@ do {
 
 section("Router: freshness routes to grounded search before any model call")
 do {
-    let router = LookupRouter(llm: StubLLM(), model: "claude-haiku-4-5", interface: .en)
+    let router = LookupRouter(llm: StubLLM(), model: "stub", interface: .en)
     let plan = await router.plan(topic: "Toy Story 5", window: "do you know the new movie Toy Story 5", spoken: .en)
     check(plan.route == .fresh && plan.needsSearch, "a brand-new movie routes to fresh, not the model")
 }
@@ -1428,6 +1441,50 @@ do {
     check((signal?.meanPitchHz ?? 0) > 120 && (signal?.meanPitchHz ?? 999) < 240,
           "vocal tracker estimates pitch from audio")
     check(signal?.estimatedWordsPerMinute != nil, "vocal tracker estimates speaking pace")
+}
+
+section("Appearance: liquid glass setting loads and clamps")
+do {
+    check(Config(liquidGlassAmount: -0.25).liquidGlassAmount == 0,
+          "liquid glass amount clamps low values in the initializer")
+    check(Config(liquidGlassAmount: 1.25).liquidGlassAmount == 1,
+          "liquid glass amount clamps high values in the initializer")
+    let path = NSTemporaryDirectory() + "mai-appearance-\(UUID().uuidString).toml"
+    try? """
+    [appearance]
+    liquid_glass = 0.45
+    """.write(toFile: path, atomically: true, encoding: .utf8)
+    let loaded = Config.load(path: path)
+    check(abs(loaded.liquidGlassAmount - 0.45) < 0.001,
+          "liquid glass amount loads from config.toml")
+    try? FileManager.default.removeItem(atPath: path)
+}
+
+section("Adaptive quiet mode: suppresses noisy density, protects important cards")
+do {
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    var card = RichCard(trigger: .question, timestamp: now, route: .entity, tier: .medium, score: 0.43,
+                        headline: "Malaysia", info: "Short answer", pending: [])
+    card.rating = CardRating(score: 0.46, grade: "weak", reasons: ["low signal"], useful: false)
+    let recent = (0..<4).map { i in
+        RichCard(trigger: .question, timestamp: now.addingTimeInterval(Double(-10 * i)),
+                 route: .entity, tier: .medium, score: 0.7, headline: "Recent \(i)", info: "ok", pending: [])
+    }
+    let quiet = AdaptiveQuietPolicy.decision(for: card, recentCards: recent,
+                                             feedbackSummary: CardFeedbackSummary(),
+                                             config: Config(adaptiveQuietMode: true,
+                                                            adaptiveQuietMaxVisibleCards: 4),
+                                             now: now)
+    check(quiet.suppress && (quiet.reason?.contains("recent density") == true),
+          "adaptive quiet suppresses low-value cards when the stream is already busy")
+
+    var critical = card
+    critical.tier = .critical
+    let protected = AdaptiveQuietPolicy.decision(for: critical, recentCards: recent,
+                                                 feedbackSummary: CardFeedbackSummary(),
+                                                 config: Config(adaptiveQuietMode: true),
+                                                 now: now)
+    check(!protected.suppress, "adaptive quiet never suppresses critical cards")
 }
 
 section("Ambient conversation focus: consent-gated sensitivity and music rejection")
@@ -1662,7 +1719,7 @@ do {
     check(line.contains("wikipedia.org"), "note line carries the source")
 
     // The export pipeline includes extraNoted (pinned cards) and the verifier keeps them.
-    let store = NotesStore(llm: StubLLM(), model: "claude-sonnet-4-6", interface: .en)
+    let store = NotesStore(llm: StubLLM(), model: "stub", interface: .en)
     await store.start(now: Date(timeIntervalSince1970: 1_700_000_000))
     let t = Date(timeIntervalSince1970: 1_700_000_000)
     await store.add(MeetingLine(speaker: "Sato", isUser: false, text: "Let us discuss the deployment.", timestamp: t))
@@ -1688,6 +1745,381 @@ do {
     ears.micMuted = false
     check(!ears.micMuted, "unmute flag cleared")
     check(lock.withLock { cleared } == [.user], "unmuting does not clear anything new")
+}
+
+section("Coach prompt file: loads and keeps its contract")
+do {
+    let prompt = Prompts.coach
+    // Prompts.load returns "" on failure, which would make the coach silently stop
+    // working and surface as a baffling unrelated failure.
+    check(!prompt.isEmpty, "the coach prompt file actually loads")
+    check(prompt.contains("live vocal coaching analyst"),
+          "the phrase the deterministic stub dispatches on survives in the file")
+    check(prompt.contains("suggested_reply") && prompt.contains("reply_translation"),
+          "the JSON contract carries the reply fields")
+    check(!prompt.contains("\u{2014}"), "no em-dashes in the prompt")
+}
+
+section("Coach reply: follows the other party's language, with ruby")
+do {
+    func coachEvent(_ text: String, language: String?, source: SpeakerSource) -> TranscriptEvent {
+        let vocal = VocalSignal(source: source, capturedAt: Date(), windowSeconds: 12,
+                                capturedSeconds: 4, speechSeconds: 2.3, silenceRatio: 0.42,
+                                meanRMS: 0.08, peakRMS: 0.31, energyTrend: -0.04,
+                                meanPitchHz: 172, pitchStdDevHz: 26, pitchSampleCount: 8,
+                                wordCount: 12, estimatedWordsPerMinute: 205)
+        return TranscriptEvent(text: text, speaker: "Sato", timestamp: Date(), isFinal: true,
+                               language: language, vocalSignal: vocal, source: source)
+    }
+
+    // Japanese speaker: the suggestion comes back in Japanese, with real furigana.
+    let ja = try? await ConversationCoach.aiInsight(
+        for: coachEvent("その価格だと、社内の承認が難しいかもしれません。", language: "ja", source: .remote),
+        window: "Sato: その価格だと、社内の承認が難しいかもしれません。",
+        llm: StubLLM(), model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .ja, suggestReplies: true)
+    check(ja?.response?.language == .ja, "a Japanese speaker gets a Japanese suggestion")
+    check((ja?.response?.spoken.isEmpty == false), "the suggestion has text to say")
+    check((ja?.response?.translation.isEmpty == false), "the suggestion carries an interface-language translation")
+    let jaUnits = Readings.units(ja?.response?.spoken ?? "", language: .ja)
+    check(jaUnits.contains { $0.reading != nil }, "furigana is generated over the Japanese suggestion")
+
+    // Chinese speaker: pinyin.
+    let zh = try? await ConversationCoach.aiInsight(
+        for: coachEvent("这个价格我们内部很难批下来。", language: "zh", source: .remote),
+        window: "Sato: 这个价格我们内部很难批下来。",
+        llm: StubLLM(), model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .zh, suggestReplies: true)
+    check(zh?.response?.language == .zh, "a Chinese speaker gets a Chinese suggestion")
+    check(Readings.units(zh?.response?.spoken ?? "", language: .zh).contains { $0.reading != nil },
+          "pinyin is generated over the Chinese suggestion")
+
+    // English speaker: plain text, no reading aid.
+    let en = try? await ConversationCoach.aiInsight(
+        for: coachEvent("That price is going to be hard to get approved.", language: "en", source: .remote),
+        window: "Sato: That price is going to be hard to get approved.",
+        llm: StubLLM(), model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .en, suggestReplies: true)
+    check(en?.response?.language == .en, "an English speaker gets an English suggestion")
+
+    // The user's OWN words never get a reply: coaching someone on how to answer
+    // themselves is meaningless.
+    let mine = try? await ConversationCoach.aiInsight(
+        for: coachEvent("その価格だと、社内の承認が難しいかもしれません。", language: "ja", source: .user),
+        window: "You: その価格だと、社内の承認が難しいかもしれません。",
+        llm: StubLLM(), model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .ja, suggestReplies: true)
+    check(mine != nil && mine?.response == nil, "the user's own utterance gets analysis but no reply")
+
+    // The reply toggle is respected.
+    let gated = try? await ConversationCoach.aiInsight(
+        for: coachEvent("その価格だと、社内の承認が難しいかもしれません。", language: "ja", source: .remote),
+        window: "Sato: その価格だと、社内の承認が難しいかもしれません。",
+        llm: StubLLM(), model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .ja, suggestReplies: false)
+    check(gated != nil && gated?.response == nil, "with replies off the coach still analyses but suggests nothing")
+
+    // Source falls back to the vocal signal for producers that predate the new field.
+    let legacy = TranscriptEvent(
+        text: "その価格だと、社内の承認が難しいかもしれません。", speaker: "Sato", timestamp: Date(), isFinal: true,
+        language: "ja",
+        vocalSignal: VocalSignal(source: .remote, capturedAt: Date(), windowSeconds: 12,
+                                 capturedSeconds: 4, speechSeconds: 2.3, silenceRatio: 0.42,
+                                 meanRMS: 0.08, peakRMS: 0.31, energyTrend: -0.04,
+                                 meanPitchHz: 172, pitchStdDevHz: 26, pitchSampleCount: 8,
+                                 wordCount: 12, estimatedWordsPerMinute: 205))
+    check(ConversationCoach.speakerSource(of: legacy) == .remote,
+          "the speaker source falls back to the vocal signal when the event has none")
+
+    // The safety filter now covers the words the user would SAY, not just the analysis.
+    let unsafeReply = StubLLM { _, _, _ in
+        #"{"should_surface":true,"headline":"Push back","info":"This is a reasonable moment to ask for specifics about the constraint.","recommended_move":"Ask for specifics.","suggested_reply":"Tell them you know they are lying about the budget.","reply_translation":"Tell them you know they are lying.","tier":"medium","score":0.8,"observed_voice_cues":["tone"]}"#
+    }
+    let blocked = try? await ConversationCoach.aiInsight(
+        for: coachEvent("That price is going to be hard to get approved.", language: "en", source: .remote),
+        window: "Sato: That price is going to be hard to get approved.",
+        llm: unsafeReply, model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .en, suggestReplies: true)
+    check(blocked == nil, "a deception claim inside the suggested reply rejects the whole output")
+
+    // Local language-parity guard: an English reply to a Japanese speaker is dropped,
+    // and the analysis is kept.
+    let mismatched = StubLLM { _, _, _ in
+        #"{"should_surface":true,"headline":"Ask for specifics","info":"This is a good moment to ask what would make the approval easier internally.","recommended_move":"Ask one clarifying question.","suggested_reply":"Could you tell me more about that?","reply_translation":"Could you tell me more about that?","tier":"medium","score":0.8,"observed_voice_cues":["pace"]}"#
+    }
+    let parity = try? await ConversationCoach.aiInsight(
+        for: coachEvent("その価格だと、社内の承認が難しいかもしれません。", language: "ja", source: .remote),
+        window: "Sato: その価格だと、社内の承認が難しいかもしれません。",
+        llm: mismatched, model: "stub", interfaceLanguage: .en,
+        spokenLanguage: .ja, suggestReplies: true)
+    check(parity != nil && parity?.response == nil,
+          "an English reply to a Japanese speaker is dropped, keeping the analysis")
+}
+
+section("Heuristic coach: analysis only, in the interface language")
+do {
+    let event = TranscriptEvent(text: "I'm worried the timeline risk is still too high.",
+                                speaker: "Mia", timestamp: Date(), isFinal: true)
+    let window = "Mia: I'm worried the timeline risk is still too high."
+    let en = ConversationCoach.insight(for: event, window: window, interfaceLanguage: .en)
+    let ja = ConversationCoach.insight(for: event, window: window, interfaceLanguage: .ja)
+    let zh = ConversationCoach.insight(for: event, window: window, interfaceLanguage: .zh)
+    check(en?.headline == "Address the concern", "the English wording is unchanged")
+    check(ja?.headline != en?.headline && ja?.headline.isEmpty == false, "Japanese gets its own wording")
+    check(zh?.headline != en?.headline && zh?.headline.isEmpty == false, "Chinese gets its own wording")
+    check(en?.key == ja?.key && ja?.key == zh?.key,
+          "the cue key is language-independent, so switching languages does not reset the cooldown")
+    check(en?.response == nil && ja?.response == nil && zh?.response == nil,
+          "the instant local layer never invents a canned reply")
+    check(ja?.trust.contains { $0.label == "Safety" } == true, "every language keeps a safety signal")
+}
+
+section("Reply ruby language: the tag wins, the script is the fallback")
+do {
+    // All-kanji Japanese: ScriptDetect alone would call this Chinese and put pinyin over
+    // it, so the tag has to win.
+    let tagged = RichResponse(spoken: "承認は来週です。", translation: "Approval is next week.",
+                              language: .ja, rationale: nil)
+    check(tagged.rubyLanguage == .ja, "an explicit Japanese tag beats script detection")
+    // Untagged Japanese (Soniox left the language nil): the script fills in, which is the
+    // case that used to render plain text in the HUD and furigana in the full app.
+    let untagged = RichResponse(spoken: "もう少し詳しく教えてください。", translation: "Tell me more.",
+                                language: .en, rationale: nil)
+    check(untagged.rubyLanguage == .ja, "untagged Japanese still gets furigana in both views")
+    let chinese = RichResponse(spoken: "请再说一点。", translation: "Say a bit more.", language: .zh, rationale: nil)
+    check(chinese.rubyLanguage == .zh, "Chinese keeps pinyin")
+    let english = RichResponse(spoken: "Could you say more?", translation: "Could you say more?",
+                               language: .en, rationale: nil)
+    check(english.rubyLanguage == .en, "English needs no reading aid")
+}
+
+section("Session transcript: policy gates, naming, index round-trip, collisions")
+do {
+    typealias P = SessionTranscriptPolicy
+    check(P.decide(enabled: false, noteTakingSaved: false, lineCount: 5, hasFolder: true) == .skipDisabled,
+          "the setting off means nothing is written")
+    check(P.decide(enabled: true, noteTakingSaved: true, lineCount: 5, hasFolder: true) == .skipNoteTakingSaved,
+          "note-taking already wrote a transcript, so there is no duplicate")
+    check(P.decide(enabled: true, noteTakingSaved: false, lineCount: 0, hasFolder: true) == .skipEmpty,
+          "an empty session writes nothing")
+    check(P.decide(enabled: true, noteTakingSaved: false, lineCount: 5, hasFolder: false) == .skipNoFolder,
+          "no notes folder means no silent write somewhere else")
+    check(P.decide(enabled: true, noteTakingSaved: false, lineCount: 5, hasFolder: true) == .save,
+          "enabled, not note-taking, has content and a folder: save")
+    check(P.decide(enabled: false, noteTakingSaved: false, lineCount: 5, hasFolder: false) == .skipDisabled,
+          "a disabled feature never nags about the missing folder")
+
+    // Naming: the human title keeps its colon, the file name cannot.
+    let started = Date(timeIntervalSince1970: 1_770_000_000)
+    let hhmm = DateFormatter(); hhmm.dateFormat = "HH:mm"
+    let day = DateFormatter(); day.dateFormat = "yyyy-MM-dd"
+    let expectedTitle = "Session " + hhmm.string(from: started)
+    check(SessionTranscriptNaming.title(startedAt: started) == expectedTitle, "the title reads as a session and a wall-clock time")
+    let base = SessionTranscriptNaming.fileBase(startedAt: started)
+    check(base == day.string(from: started) + " " + expectedTitle.replacingOccurrences(of: ":", with: "-"),
+          "the file base is date-prefixed with the colon sanitized out")
+    check(!base.contains(":"), "a colon never reaches the file system")
+
+    // Collisions inside the same minute.
+    check(SessionTranscriptNaming.uniqueFileName(base: "X", ext: ".md", exists: { _ in false }) == "X.md",
+          "no collision means the plain name")
+    check(SessionTranscriptNaming.uniqueFileName(base: "X", ext: ".md",
+                                                 exists: { ["X.md", "X (2).md"].contains($0) }) == "X (3).md",
+          "collisions walk to the next free suffix instead of overwriting")
+
+    // Empty input is a true no-op: no file, and no index created.
+    let emptyDir = tempDir()
+    let emptyDraft = SessionTranscriptDraft(lines: [], startedAt: started, endedAt: started,
+                                            reason: .stopped, truncated: false)
+    let nothing = try? SessionTranscriptWriter.save(draft: emptyDraft, to: emptyDir)
+    check((nothing ?? nil) == nil, "an empty session returns no saved result")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: emptyDir.path)) ?? []
+    check(leftovers.isEmpty, "an empty session leaves no file and no index behind")
+
+    // Round-trip: two sessions, newest first, both marked as transcripts, both readable.
+    let dir = tempDir()
+    let l1 = MeetingLine(speaker: "Sato", isUser: false, text: "来週の予定を確認しましょう。", timestamp: started, language: "ja")
+    let l2 = MeetingLine(speaker: "You", isUser: true, text: "Sounds good.", timestamp: started.addingTimeInterval(4), language: "en")
+    let d1 = SessionTranscriptDraft(lines: [l1, l2], startedAt: started, endedAt: started.addingTimeInterval(60),
+                                    reason: .stopped, truncated: false)
+    let d2 = SessionTranscriptDraft(lines: [l2], startedAt: started.addingTimeInterval(7_200),
+                                    endedAt: started.addingTimeInterval(7_260),
+                                    reason: .rolledOver("idle"), truncated: false)
+    let s1 = try? SessionTranscriptWriter.save(draft: d1, to: dir)
+    let s2 = try? SessionTranscriptWriter.save(draft: d2, to: dir)
+    check((s1 ?? nil) != nil && (s2 ?? nil) != nil, "both sessions save")
+    let index = MeetingIndexEntry.load(from: dir.appendingPathComponent("mai-meetings.json"))
+    check(index.count == 2, "both sessions land in the saved-meetings index")
+    check(index.allSatisfy { $0.isTranscriptOnly }, "both are marked as transcript-only, not verified notes")
+    check(index.allSatisfy { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0.markdownFileName).path) },
+          "every index row points at a file that exists")
+    check(index.allSatisfy { $0.openFileName.hasSuffix(".md") },
+          "Open targets the .md, since a transcript has no .docx")
+
+    // Same-minute collision writes a second file rather than overwriting the first.
+    let again = try? SessionTranscriptWriter.save(draft: d1, to: dir)
+    check(((again ?? nil)?.fileName ?? "").hasSuffix(" (2).md"), "a second session in the same minute gets its own file")
+    let index2 = MeetingIndexEntry.load(from: dir.appendingPathComponent("mai-meetings.json"))
+    check(index2.count == 3 && Set(index2.map(\.id)).count == 3, "each save is a distinct index row")
+
+    // Index compatibility, both directions. load() returns [] on ANY decode error, so a
+    // row it cannot read would wipe the user's whole list.
+    let legacyDir = tempDir()
+    let legacyURL = legacyDir.appendingPathComponent("mai-meetings.json")
+    let legacyJSON = """
+    [{"id":"old-1","title":"Legacy meeting","date":"2026-08-01T10:00:00Z","docxFileName":"a.docx","markdownFileName":"a.md"}]
+    """
+    try? Data(legacyJSON.utf8).write(to: legacyURL)
+    let legacy = MeetingIndexEntry.load(from: legacyURL)
+    check(legacy.count == 1, "an index written before transcripts existed still loads")
+    check(legacy.first?.kind == nil && legacy.first?.isTranscriptOnly == false,
+          "a legacy row is treated as full notes")
+    let futureURL = tempDir().appendingPathComponent("mai-meetings.json")
+    let futureJSON = """
+    [{"id":"new-1","title":"Newer kind","date":"2026-08-01T10:00:00Z","docxFileName":"a.docx","markdownFileName":"a.md","kind":"somethingNewer"}]
+    """
+    try? Data(futureJSON.utf8).write(to: futureURL)
+    let future = MeetingIndexEntry.load(from: futureURL)
+    check(future.count == 1 && future.first?.isTranscriptOnly == false,
+          "an unknown kind still decodes instead of emptying the list")
+
+    // Truncation is stated in the file, not silently dropped.
+    let note = SessionTranscript.truncationNote()
+    let rendered = MarkdownTranscript.render(title: "T", lines: [l1], startedAt: started, endedAt: started, note: note)
+    check(rendered.contains(note), "a truncated session says so in the saved file")
+    check(!MarkdownTranscript.render(title: "T", lines: [l1], startedAt: started, endedAt: started).contains(note),
+          "an untruncated session carries no note, so existing output is unchanged")
+
+    // Status wording, so the two save paths cannot drift.
+    typealias S = SessionTranscriptStatus
+    check(S.fragment(for: .saved(fileName: "a.md"), includeSetupHint: false) == "Saved session transcript: a.md",
+          "a successful save names the file")
+    check((S.fragment(for: .skipped(.skipNoFolder), includeSetupHint: false) ?? "").contains("notes folder"),
+          "a missing folder is reported with the fix")
+    check(S.fragment(for: .skipped(.skipEmpty), includeSetupHint: false) == nil, "an empty session says nothing")
+    check(S.fragment(for: .skipped(.skipNoteTakingSaved), includeSetupHint: false) == nil,
+          "a note-taking session says nothing about transcripts")
+    check(S.fragment(for: .skipped(.skipDisabled), includeSetupHint: false) == nil, "the disabled case is quiet by default")
+    check((S.fragment(for: .skipped(.skipDisabled), includeSetupHint: true) ?? "").contains("Settings"),
+          "the one-time hint points at the setting")
+    check((S.fragment(for: .failed("disk full"), includeSetupHint: false) ?? "").contains("disk full"),
+          "a failure reports the real reason")
+}
+
+section("Capture health: silence is normal, a dead microphone leg is not")
+do {
+    // A quiet room: both sources delivering, nothing voiced, nothing forwarded recently.
+    // This must never restart capture, which is why the policy keys off voiced audio
+    // and per-source arrival rather than "no transcript lately".
+    let quiet = CaptureHealthInput(micCapturedAgo: 0.2, systemCapturedAgo: 0.2,
+                                   micVoicedAgo: 300, sentAgo: 300, transcriptAgo: 300)
+    check(CaptureHealthPolicy.verdict(quiet) == .healthy, "a quiet room is healthy, never a restart")
+
+    // Whole stack dead: no audio from either source.
+    let dead = CaptureHealthInput(micCapturedAgo: 30, systemCapturedAgo: 30,
+                                  micVoicedAgo: 60, sentAgo: 60, transcriptAgo: 60)
+    if case .restart = CaptureHealthPolicy.verdict(dead) {
+        check(true, "no audio from any source restarts capture")
+    } else {
+        check(false, "no audio from any source restarts capture")
+    }
+
+    // Audio reaching the service but nothing coming back.
+    let stalled = CaptureHealthInput(micCapturedAgo: 0.2, systemCapturedAgo: 0.2,
+                                     micVoicedAgo: 2, sentAgo: 2, transcriptAgo: 40)
+    if case .restart = CaptureHealthPolicy.verdict(stalled) {
+        check(true, "audio flowing with no transcript restarts capture")
+    } else {
+        check(false, "audio flowing with no transcript restarts capture")
+    }
+
+    // THE REGRESSION CASE. The mic leg stopped while system audio keeps arriving. The
+    // old two-rule watchdog was blind to this: the shared "captured" heartbeat stayed
+    // fresh (system audio) and "sent" grew without bound, so neither old rule could fire
+    // and the app reported "Capturing" while transcribing nothing.
+    let micDead = CaptureHealthInput(micCapturedAgo: 200, systemCapturedAgo: 0.2,
+                                     micVoicedAgo: 4_000, sentAgo: 4_000, transcriptAgo: 4_000)
+    check(micDead.capturedAgo < CaptureHealthPolicy.deadCaptureSeconds,
+          "the old shared heartbeat looks healthy here, which is why this fault was invisible")
+    check(!(micDead.sentAgo < 6 && micDead.transcriptAgo > 20),
+          "the old stalled-transcription rule cannot fire here either")
+    if case .restart(let why) = CaptureHealthPolicy.verdict(micDead) {
+        check(why.hasPrefix("microphone stopped"), "a dead mic leg is now detected and restarted")
+    } else {
+        check(false, "a dead mic leg is now detected and restarted")
+    }
+
+    // After the restart budget is spent, it reports instead of restarting forever.
+    var exhausted = micDead
+    exhausted.micRecoveryAttempts = CaptureHealthPolicy.maxMicRecoveryAttempts
+    if case .warn(let message) = CaptureHealthPolicy.verdict(exhausted) {
+        check(message.contains("Microphone"), "a mic leg that will not recover reports instead of looping")
+    } else {
+        check(false, "a mic leg that will not recover reports instead of looping")
+    }
+
+    // A muted mic is expected to go quiet: never a fault.
+    var muted = micDead
+    muted.micMuted = true
+    check(CaptureHealthPolicy.verdict(muted) == .healthy, "a muted microphone is not a capture fault")
+
+    // Errors that used to be discarded now surface, and stale ones do not nag.
+    let failing = CaptureHealthInput(micCapturedAgo: 0.2, systemCapturedAgo: 0.2,
+                                     micVoicedAgo: 500, sentAgo: 500, transcriptAgo: 500,
+                                     errorAgo: 5, lastError: "soniox error 402: balance exhausted")
+    if case .warn(let message) = CaptureHealthPolicy.verdict(failing) {
+        check(message.contains("402"), "a transcription service error is surfaced verbatim")
+    } else {
+        check(false, "a transcription service error is surfaced verbatim")
+    }
+    var stale = failing
+    stale.errorAgo = CaptureHealthPolicy.errorFreshSeconds + 60
+    stale.sentAgo = 60
+    stale.micVoicedAgo = 600
+    check(CaptureHealthPolicy.verdict(stale) == .healthy, "an old error does not keep warning")
+
+    // Speech is audible but nothing is being forwarded: the fault is before the network.
+    let heardNotSent = CaptureHealthInput(micCapturedAgo: 0.2, systemCapturedAgo: 0.2,
+                                          micVoicedAgo: 5, sentAgo: 400, transcriptAgo: 400)
+    if case .warn(let message) = CaptureHealthPolicy.verdict(heardNotSent) {
+        check(message.contains("heard"), "audio heard but never forwarded is reported")
+    } else {
+        check(false, "audio heard but never forwarded is reported")
+    }
+
+    // A long stretch with nothing transcribed at all: the only signal that catches a
+    // microphone delivering digital silence (buffers arrive, so they carry no speech).
+    let longSilence = CaptureHealthInput(micCapturedAgo: 0.2, systemCapturedAgo: 0.2,
+                                         micVoicedAgo: 5_000,
+                                         sentAgo: CaptureHealthPolicy.silentTooLongSeconds + 60,
+                                         transcriptAgo: 5_000)
+    if case .notice(let message) = CaptureHealthPolicy.verdict(longSilence) {
+        check(message.contains("No speech"), "a long stretch with no speech is a notice, not a status-line warning")
+        // The message must not embed an elapsed time. The app republishes only when the
+        // text changes, so an interpolated duration would rewrite the status line every
+        // minute forever during ordinary quiet.
+        var later = longSilence
+        later.sentAgo += 600
+        check(CaptureHealthPolicy.verdict(later) == .notice(message),
+              "the quiet notice text is stable as time passes, so it cannot churn the UI")
+    } else {
+        check(false, "a long stretch with no speech is a notice, not a status-line warning")
+    }
+    var longSilenceMuted = longSilence
+    longSilenceMuted.micMuted = true
+    check(CaptureHealthPolicy.verdict(longSilenceMuted) == .healthy,
+          "a deliberately muted mic never nags about silence")
+
+    // The raw ages behind a note, so the rules are observable instead of assumed.
+    // An event that never happened is carried as a distantPast age, which must read as
+    // "never" rather than a meaningless ten-digit number.
+    var neverHeard = micDead
+    neverHeard.micVoicedAgo = Date().timeIntervalSince(.distantPast)
+    let detail = CaptureHealthPolicy.detail(neverHeard)
+    check(detail.contains("speech heard never"), "an age that never happened reads as 'never', not a huge number")
+    check(detail.contains("Microphone audio"), "the detail names the microphone leg explicitly")
+    check(CaptureHealthPolicy.detail(micDead).contains("66m ago"),
+          "a finite age reads in minutes once it is past the seconds range")
 }
 
 // Summary

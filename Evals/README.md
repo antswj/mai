@@ -14,6 +14,12 @@ What they check:
   accurate, natural prepared lines with correct furigana (Japanese) and pinyin
   (Chinese) plus a faithful translation, and grounded fun facts and recipes with no
   fabricated links.
+- Conversation coach (`promptfooconfig.coach.yaml` + `coach_dataset.yaml`): grades that
+  a suggested reply is written in the language the OTHER PERSON is speaking, is offered
+  just as readily in Japanese and Chinese as in English, carries an interface-language
+  translation, adds no parenthetical readings (the app renders true ruby locally), is
+  never produced for the user's own words, and never claims deception or coaches
+  pressure or manipulation.
 - Lookup router (`promptfooconfig.router.yaml` + `router_dataset.yaml`): picks the
   right route (entity / fresh / technical), keeps Japanese and Chinese entity names
   in their native script, and flags freshness for time-sensitive asks. Trivial
@@ -22,7 +28,7 @@ What they check:
 
 ## Run them
 
-You need an Anthropic key (the grader and models under test use Claude). From the
+You need an Anthropic key (the grader and the models under test run on it). From the
 repo root, make your key available to promptfoo, then run from this folder:
 
 ```
@@ -35,6 +41,7 @@ promptfoo eval -c promptfooconfig.router.yaml
 promptfoo eval -c promptfooconfig.assistant.yaml
 promptfoo eval -c promptfooconfig.notes.yaml
 promptfoo eval -c promptfooconfig.responder.yaml
+promptfoo eval -c promptfooconfig.coach.yaml
 ```
 
 View the last results in a browser:

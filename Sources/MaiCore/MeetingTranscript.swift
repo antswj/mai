@@ -50,7 +50,11 @@ public struct MeetingExport: Sendable, Codable, Equatable {
 // timestamps. Pure and deterministic for a fixed clock; the formatter is UTC-free
 // wall-clock HH:mm:ss relative to nothing (absolute local time of each line).
 public enum MarkdownTranscript {
-    public static func render(title: String, lines: [MeetingLine], startedAt: Date, endedAt: Date) -> String {
+    /// `note` adds one factual line under the header (for example that the in-memory
+    /// buffer reached its cap and dropped the oldest lines). Defaulted, so existing
+    /// callers and their expected output are unchanged.
+    public static func render(title: String, lines: [MeetingLine], startedAt: Date, endedAt: Date,
+                              note: String? = nil) -> String {
         let stamp = DateFormatter()
         stamp.dateFormat = "HH:mm:ss"
         let day = DateFormatter()
@@ -58,6 +62,7 @@ public enum MarkdownTranscript {
 
         var out = "# \(title)\n\n"
         out += "_Transcript recorded \(day.string(from: startedAt)), \(lines.count) lines._\n\n"
+        if let note, !note.isEmpty { out += "_\(note)_\n\n" }
         for line in lines {
             let who = line.isUser ? "\(line.speaker) (you)" : line.speaker
             out += "**[\(stamp.string(from: line.timestamp))] \(who):** \(line.text)\n\n"
@@ -65,8 +70,9 @@ public enum MarkdownTranscript {
         return out
     }
 
-    public static func write(title: String, lines: [MeetingLine], startedAt: Date, endedAt: Date, to url: URL) throws {
-        let markdown = render(title: title, lines: lines, startedAt: startedAt, endedAt: endedAt)
+    public static func write(title: String, lines: [MeetingLine], startedAt: Date, endedAt: Date,
+                             note: String? = nil, to url: URL) throws {
+        let markdown = render(title: title, lines: lines, startedAt: startedAt, endedAt: endedAt, note: note)
         try Data(markdown.utf8).write(to: url, options: .atomic)
     }
 }

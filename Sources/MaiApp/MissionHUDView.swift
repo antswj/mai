@@ -14,9 +14,13 @@ struct MissionHUDView: View {
     @State private var showAsk = false
 
     private var presence: LivingGlow.Presence {
-        if model.assistantThinking { return .thinking }
-        if model.isPaused { return .idle }
-        return .listening
+        if model.isPaused { return .private }
+        if model.micMuted { return .muted }
+        if model.assistantThinking || model.notesProcessing != nil { return .thinking }
+        if model.providerHealthRunning || model.traceReplayRunning ||
+            model.richItems.contains(where: { !$0.suppressed && !$0.pending.isEmpty }) { return .finding }
+        if model.isCapturing || model.useSimulated || model.sessionActive { return .listening }
+        return .idle
     }
 
     var body: some View {
@@ -55,8 +59,11 @@ struct MissionHUDView: View {
             // and adapts to what is behind it, so there is NO manual border (a drawn
             // stroke is the hard edge glass is meant to avoid). The shadow gives depth;
             // the outer padding leaves room for it so it is not clipped at the edge.
-            .missionGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
+            .missionGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous),
+                          amount: model.config.liquidGlassAmount)
+            .shadow(color: .black.opacity(0.18 + (0.20 * model.config.liquidGlassAmount)),
+                    radius: 10 + (8 * model.config.liquidGlassAmount),
+                    y: 4 + (5 * model.config.liquidGlassAmount))
         }
         .padding(22)   // more than the shadow radius, so the soft shadow is not clipped at the panel edge
     }
@@ -69,10 +76,10 @@ struct MissionHUDView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            LivingGlow(presence: presence)
             Text(model.isPaused ? "Paused" : "Mai")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
+            PresenceChip(presence: presence, glassAmount: model.config.liquidGlassAmount)
             Spacer()
             // Quiet icon-only controls (each with an accessibility label) so the header
             // stays glanceable: translate, mute, ask, pause.
@@ -112,7 +119,8 @@ struct MissionHUDView: View {
                 .accessibilityLabel("Hide Mission Mode")
             }
             .padding(3)
-            .spatialPanel(in: Capsule(), shadowOpacity: 0.08)
+            .spatialPanel(in: Capsule(), shadowOpacity: 0.08,
+                          glassAmount: model.config.liquidGlassAmount)
         }
         .foregroundStyle(.secondary)
     }
@@ -147,6 +155,7 @@ struct MissionHUDView: View {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(cards) { card in
                     MiniCard(card: card, ruby: model.config.ruby,
+                             glassAmount: model.config.liquidGlassAmount,
                              pinned: model.isPinned(card.id), expanded: model.isExpanded(card.id),
                              onTogglePin: { model.isPinned(card.id) ? model.unpin(card.id) : model.pin(card) },
                              onToggleExpand: { withAnimation(.easeInOut(duration: 0.2)) { model.toggleExpand(card.id) } })
@@ -166,6 +175,7 @@ struct MissionHUDView: View {
 struct MiniCard: View {
     let card: RichCard
     var ruby: Bool
+    var glassAmount: Double = 0.72
     var pinned: Bool = false
     var expanded: Bool = false
     var onTogglePin: (() -> Void)?
@@ -218,7 +228,11 @@ struct MiniCard: View {
             }
 
             if let info = card.info, !info.isEmpty {
-                Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(expanded ? nil : 4)
+                if card.route == .sessionOperator {
+                    SessionRecapView(text: info, compact: !expanded)
+                } else {
+                    Text(info).font(.callout).foregroundStyle(.secondary).lineLimit(expanded ? nil : 4)
+                }
             } else if card.isLoading {
                 ProgressView().controlSize(.small)
             }
@@ -229,8 +243,10 @@ struct MiniCard: View {
 
             if let r = card.response {
                 Divider().opacity(0.4)
-                if ruby && r.language != .en {
-                    RubyLineView(units: Readings.units(r.spoken, language: r.language), baseFont: 16)
+                // rubyLanguage, not the raw tag: an untagged Japanese reply used to get
+                // furigana in the full app and plain text here.
+                if ruby && r.rubyLanguage != .en {
+                    RubyLineView(units: Readings.units(r.spoken, language: r.rubyLanguage), baseFont: 16)
                 } else {
                     Text(r.spoken).font(.callout.weight(.medium)).foregroundStyle(.primary)
                 }
@@ -264,7 +280,8 @@ struct MiniCard: View {
         // Translucent, not opaque, so the Liquid Glass surface reads THROUGH the card
         // (present but not a solid slab), with a faint tier tint and a soft shadow for
         // depth. Content stays content; only the surface below is glass.
-        .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: tint)
+        .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous),
+                            tint: tint, glassAmount: glassAmount)
         // Tap the card body (not the buttons) to expand/collapse.
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture { onToggleExpand?() }

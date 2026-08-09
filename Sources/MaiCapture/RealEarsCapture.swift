@@ -20,10 +20,16 @@ extension RealEars {
             languageHints: cfg.sttLanguageHints, languageId: cfg.sttLanguageId,
             diarization: cfg.sttDiarization, translationTarget: translationTarget)
 
+        // Soniox reports config rejections, auth failures, billing problems, and dropped
+        // sockets through onError. Those used to be discarded, so an account or key
+        // problem was indistinguishable from a quiet room. They now reach the health
+        // policy and the user.
         let mic = SonioxClient(configJSON: micConfig,
-                               onUpdate: { [weak self] up in self?.handle(up, source: .user) })
+                               onUpdate: { [weak self] up in self?.handle(up, source: .user) },
+                               onError: { [weak self] message in self?.noteError(message) })
         let system = SonioxClient(configJSON: systemConfig,
-                                  onUpdate: { [weak self] up in self?.handle(up, source: .remote) })
+                                  onUpdate: { [weak self] up in self?.handle(up, source: .remote) },
+                                  onError: { [weak self] message in self?.noteError(message) })
         setClients(mic: mic, system: system)
 
         // With VAD gating on, each gate connects its socket lazily on speech onset and
@@ -39,12 +45,16 @@ extension RealEars {
             system.connect()
         }
 
-        let capture = AudioCapture(sampleRate: cfg.sttSampleRate) { [weak self] source, data in
+        let capture = AudioCapture(sampleRate: cfg.sttSampleRate, onPCM: { [weak self] source, data in
             switch source {
             case .user: self?.feedMic(data)
             case .remote: self?.feedSystem(data)
             }
-        }
+        }, onStreamError: { [weak self] message in
+            // A ScreenCaptureKit stream that stops on its own (display reconfiguration,
+            // a revoked grant, an internal error) used to fail silently.
+            self?.noteError("audio capture stopped: \(message)")
+        })
         try await capture.start()
         setAudioCapture(capture)
     }

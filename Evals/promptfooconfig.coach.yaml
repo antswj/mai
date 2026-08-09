@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Behavioral evals (LLM-as-judge) for Mai's conversation coach prompt: the suggested
+# reply is written in the language the OTHER PERSON is speaking (Japanese in ->
+# Japanese reply, Chinese -> Chinese, English -> English, and a mid-conversation
+# switch tracks per utterance), carries an interface-language translation, is offered
+# equally readily across languages, contains no parenthetical readings (the app renders
+# true ruby locally), is never suggested for the user's own words, and never claims
+# deception or coaches manipulation. The gating, dedup, and language-parity plumbing
+# are covered in `swift run MaiTests`.
+# Run: `promptfoo eval -c promptfooconfig.coach.yaml`
+description: Mai conversation coach (reply language follows the other person)
+
+prompts:
+  - file://coach_prompt.js
+
+providers:
+  - id: anthropic:messages:claude-sonnet-4-6
+    config:
+      max_tokens: 600
+      temperature: 0
+
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-sonnet-4-6
+      config:
+        max_tokens: 512
+  assert:
+    - type: contains-json
+
+tests: file://coach_dataset.yaml

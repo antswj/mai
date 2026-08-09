@@ -18,6 +18,10 @@ public struct Config: Sendable {
     public var threshold: Double
     public var showSuppressedLog: Bool
     public var refireCooldownSeconds: Double
+    public var adaptiveQuietMode: Bool
+    public var adaptiveQuietWindowSeconds: Double
+    public var adaptiveQuietMaxVisibleCards: Int
+    public var adaptiveQuietLearningStrength: Double
     public var enabledTriggers: [String]
     public var interfaceLanguage: Language
     public var floorLanguage: Language
@@ -43,8 +47,16 @@ public struct Config: Sendable {
     public var sessionAutoRollover: Bool
     public var sessionIdleRolloverSeconds: Double
     public var sessionMaxSeconds: Double
+    // Write a plain transcript to the notes folder each time a session ends. Off by
+    // default: every user-visible document Mai writes today is the result of an explicit
+    // act, and auto-rollover means a default-on setting would put files in the user's
+    // folder from ordinary desk conversation with no action at all.
+    public var sessionTranscriptAutoSave: Bool
     public var showLiveTranscript: Bool
     public var ruby: Bool
+    // Visual tuning for the Mission HUD and card surfaces. 0 is calmer/denser,
+    // 1 is the clearest/glassiest treatment.
+    public var liquidGlassAmount: Double
     // Step 3: card intelligence (lookup router), the response toggle, latency caps,
     // and on-device voice-activity gating.
     public var lookupEnabled: Bool
@@ -94,6 +106,10 @@ public struct Config: Sendable {
         threshold: Double = 0.6,
         showSuppressedLog: Bool = true,
         refireCooldownSeconds: Double = 90,
+        adaptiveQuietMode: Bool = true,
+        adaptiveQuietWindowSeconds: Double = 90,
+        adaptiveQuietMaxVisibleCards: Int = 4,
+        adaptiveQuietLearningStrength: Double = 1,
         enabledTriggers: [String] = ["place", "question", "intent", "reference", "screenReference"],
         interfaceLanguage: Language = .en,
         floorLanguage: Language = .ja,
@@ -118,8 +134,10 @@ public struct Config: Sendable {
         sessionAutoRollover: Bool = true,
         sessionIdleRolloverSeconds: Double = 20 * 60,
         sessionMaxSeconds: Double = 4 * 60 * 60,
+        sessionTranscriptAutoSave: Bool = false,
         showLiveTranscript: Bool = true,
         ruby: Bool = true,
+        liquidGlassAmount: Double = 0.72,
         lookupEnabled: Bool = true,
         lookupRouterModel: String = "claude-haiku-4-5",
         responseEnabled: Bool = false,
@@ -148,7 +166,12 @@ public struct Config: Sendable {
         self.targetSeconds = targetSeconds; self.hardCapSeconds = hardCapSeconds
         self.maxTurns = maxTurns; self.maxSeconds = maxSeconds
         self.threshold = threshold; self.showSuppressedLog = showSuppressedLog
-        self.refireCooldownSeconds = refireCooldownSeconds; self.enabledTriggers = enabledTriggers
+        self.refireCooldownSeconds = refireCooldownSeconds
+        self.adaptiveQuietMode = adaptiveQuietMode
+        self.adaptiveQuietWindowSeconds = max(15, adaptiveQuietWindowSeconds)
+        self.adaptiveQuietMaxVisibleCards = max(1, adaptiveQuietMaxVisibleCards)
+        self.adaptiveQuietLearningStrength = Self.clamp01(adaptiveQuietLearningStrength)
+        self.enabledTriggers = enabledTriggers
         self.interfaceLanguage = interfaceLanguage; self.floorLanguage = floorLanguage
         self.meetingMode = meetingMode; self.furigana = furigana; self.pinyin = pinyin
         self.screenChangeThreshold = screenChangeThreshold; self.screenAlwaysOn = screenAlwaysOn
@@ -161,7 +184,9 @@ public struct Config: Sendable {
         self.sessionAutoRollover = sessionAutoRollover
         self.sessionIdleRolloverSeconds = sessionIdleRolloverSeconds
         self.sessionMaxSeconds = sessionMaxSeconds
+        self.sessionTranscriptAutoSave = sessionTranscriptAutoSave
         self.showLiveTranscript = showLiveTranscript; self.ruby = ruby
+        self.liquidGlassAmount = Self.clamp01(liquidGlassAmount)
         self.lookupEnabled = lookupEnabled; self.lookupRouterModel = lookupRouterModel
         self.responseEnabled = responseEnabled; self.onlineCapSeconds = onlineCapSeconds
         self.vadEnabled = vadEnabled; self.vadEngine = vadEngine
@@ -195,6 +220,10 @@ public struct Config: Sendable {
         return c
     }
 
+    private static func clamp01(_ value: Double) -> Double {
+        min(1.0, max(0.0, value))
+    }
+
     /// Load from a config.toml. Missing file or missing keys fall back to defaults.
     public static func load(path: String = "config.toml") -> Config {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
@@ -217,6 +246,10 @@ public struct Config: Sendable {
         if let v = dbl("surfacing", "threshold") { c.threshold = v }
         if let v = bln("surfacing", "show_suppressed_log") { c.showSuppressedLog = v }
         if let v = dbl("surfacing", "refire_cooldown_seconds") { c.refireCooldownSeconds = v }
+        if let v = bln("surfacing", "adaptive_quiet") { c.adaptiveQuietMode = v }
+        if let v = dbl("surfacing", "adaptive_quiet_window_seconds") { c.adaptiveQuietWindowSeconds = max(15, v) }
+        if let v = dbl("surfacing", "adaptive_quiet_max_visible_cards") { c.adaptiveQuietMaxVisibleCards = max(1, Int(v)) }
+        if let v = dbl("surfacing", "adaptive_quiet_learning_strength") { c.adaptiveQuietLearningStrength = Self.clamp01(v) }
         if let v = toml["triggers"]?["enabled"]?.stringArray { c.enabledTriggers = v }
         if let v = str("language", "interface"), let l = Language(rawValue: v) { c.interfaceLanguage = l }
         if let v = str("language", "floor"), let l = Language(rawValue: v) { c.floorLanguage = l }
@@ -243,8 +276,10 @@ public struct Config: Sendable {
         if let v = bln("session", "auto_rollover") { c.sessionAutoRollover = v }
         if let v = dbl("session", "idle_rollover_seconds") { c.sessionIdleRolloverSeconds = v }
         if let v = dbl("session", "max_seconds") { c.sessionMaxSeconds = v }
+        if let v = bln("session", "save_transcript") { c.sessionTranscriptAutoSave = v }
         if let v = bln("transcript", "show_live") { c.showLiveTranscript = v }
         if let v = bln("transcript", "ruby") { c.ruby = v }
+        if let v = dbl("appearance", "liquid_glass") { c.liquidGlassAmount = Self.clamp01(v) }
         // Step 3 sections.
         if let v = bln("lookup", "enabled") { c.lookupEnabled = v }
         if let v = str("lookup", "router_model") { c.lookupRouterModel = v }

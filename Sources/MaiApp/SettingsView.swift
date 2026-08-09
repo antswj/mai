@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var hangover: Double = 4
     @State private var idleMinutes: Double = 20
     @State private var maxHours: Double = 4
+    @State private var glassAmount: Double = 0.72
 
     private func langBinding(_ keyPath: WritableKeyPath<Config, Language>) -> Binding<Language> {
         Binding(get: { model.config[keyPath: keyPath] }, set: { v in model.updateConfig { $0[keyPath: keyPath] = v } })
@@ -36,6 +37,8 @@ struct SettingsView: View {
                 Toggle("Suggested replies", isOn: Binding(get: { model.responseEnabled }, set: { _ in model.toggleResponse() }))
                 Toggle("Show suppressed cards", isOn: Binding(get: { model.showSuppressed },
                                                               set: { model.setShowSuppressed($0) }))
+                Toggle("Adaptive quiet mode", isOn: Binding(get: { model.config.adaptiveQuietMode },
+                                                            set: { v in model.updateQuietConfig { $0.adaptiveQuietMode = v } }))
                 VStack(alignment: .leading) {
                     Text("Surfacing sensitivity")
                     Slider(value: $threshold, in: 0.3...0.9, step: 0.05) { editing in
@@ -65,7 +68,39 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Appearance") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Liquid Glass")
+                        Spacer()
+                        Text("\(Int((glassAmount * 100).rounded()))%")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $glassAmount, in: 0...1, step: 0.05) { editing in
+                        if !editing {
+                            model.updateAppearanceConfig { $0.liquidGlassAmount = glassAmount }
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Text("Mai")
+                            .font(.callout.weight(.semibold))
+                        Spacer()
+                        PresenceChip(presence: model.isPaused ? .private : .listening,
+                                     glassAmount: glassAmount)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .spatialPanel(in: Capsule(), shadowOpacity: 0.08, glassAmount: glassAmount)
+                }
+            }
+
             Section("Sessions") {
+                Toggle("Save transcript when a session ends",
+                       isOn: Binding(get: { model.config.sessionTranscriptAutoSave },
+                                     set: { v in model.updateSessionConfig { $0.sessionTranscriptAutoSave = v } }))
+                Text("Writes a plain transcript to your notes folder each time a session stops or rolls over. Note-taking sessions already save one, so they are not written twice.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Auto session rollover", isOn: Binding(get: { model.config.sessionAutoRollover },
                                                               set: { v in model.updateConfig { $0.sessionAutoRollover = v } }))
                 slider("Idle rollover (minutes)", $idleMinutes, 5...120, step: 5) {
@@ -109,6 +144,7 @@ struct SettingsView: View {
             hangover = model.config.vadSilenceHangoverSeconds
             idleMinutes = model.config.sessionIdleRolloverSeconds / 60
             maxHours = model.config.sessionMaxSeconds / 3600
+            glassAmount = model.config.liquidGlassAmount
         }
     }
 

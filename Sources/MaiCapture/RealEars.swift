@@ -82,23 +82,72 @@ public final class RealEars: Ears, @unchecked Sendable {
         try await startCapture()
     }
 
-    // Liveness heartbeats for the watchdog: when audio was last captured from the
-    // system, last forwarded to Soniox, and last heard back from Soniox. These let
-    // the app tell "quiet" (normal) apart from "stuck" (audio flowing but no
-    // transcript) and "dead" (no audio at all) without false restarts during silence.
+    // Liveness heartbeats for the watchdog: when each source last delivered audio, when
+    // the mic last carried actual speech energy, when audio was last forwarded to
+    // Soniox, and when Soniox last answered. Tracking the two sources SEPARATELY is what
+    // lets the app notice a dead microphone leg while system audio keeps arriving; a
+    // single shared heartbeat hid that fault entirely. The voiced timestamp separates
+    // "the room is quiet" (normal) from "we can hear speech but nothing is being
+    // transcribed" (broken), so silence never causes a false restart.
     private let healthLock = NSLock()
-    private var _capturedAt = Date()
+    private var _micCapturedAt = Date()
+    private var _systemCapturedAt = Date()
+    private var _micVoicedAt = Date.distantPast
     private var _sentAt = Date.distantPast
     private var _transcriptAt = Date.distantPast
-    func noteCaptured() { healthLock.withLock { _capturedAt = Date() } }
-    func noteSent() { healthLock.withLock { _sentAt = Date() } }
-    func noteTranscript() { healthLock.withLock { _transcriptAt = Date() } }
-    public func resetHealth() { healthLock.withLock { let now = Date(); _capturedAt = now; _sentAt = now; _transcriptAt = now } }
-    public func health() -> (capturedAgo: TimeInterval, sentAgo: TimeInterval, transcriptAgo: TimeInterval) {
+    private var _errorAt = Date.distantPast
+    private var _lastError: String?
+    func noteCaptured(_ source: SpeakerSource) {
         healthLock.withLock {
             let now = Date()
-            return (now.timeIntervalSince(_capturedAt), now.timeIntervalSince(_sentAt), now.timeIntervalSince(_transcriptAt))
+            if source == .user { _micCapturedAt = now } else { _systemCapturedAt = now }
         }
+    }
+    func noteVoiced(_ source: SpeakerSource) {
+        guard source == .user else { return }
+        healthLock.withLock { _micVoicedAt = Date() }
+    }
+    func noteSent() { healthLock.withLock { _sentAt = Date() } }
+    func noteTranscript() { healthLock.withLock { _transcriptAt = Date() } }
+    /// A capture or transcription error worth showing. These used to be discarded, which
+    /// is why an unreachable or rejecting speech service looked identical to silence.
+    func noteError(_ text: String) {
+        healthLock.withLock { _errorAt = Date(); _lastError = text }
+        Self.logCapture("error: \(text)")
+    }
+    public func resetHealth() {
+        healthLock.withLock {
+            let now = Date()
+            _micCapturedAt = now; _systemCapturedAt = now
+            _micVoicedAt = .distantPast
+            _sentAt = now; _transcriptAt = now
+            _errorAt = .distantPast; _lastError = nil
+        }
+    }
+    /// Current liveness snapshot for `CaptureHealthPolicy`. `micRecoveryAttempts` is
+    /// owned by the app (it counts restarts across sessions), so it is filled there.
+    public func liveness() -> CaptureHealthInput {
+        healthLock.withLock {
+            let now = Date()
+            return CaptureHealthInput(
+                micCapturedAgo: now.timeIntervalSince(_micCapturedAt),
+                systemCapturedAgo: now.timeIntervalSince(_systemCapturedAt),
+                micVoicedAgo: now.timeIntervalSince(_micVoicedAt),
+                sentAgo: now.timeIntervalSince(_sentAt),
+                transcriptAgo: now.timeIntervalSince(_transcriptAt),
+                errorAgo: now.timeIntervalSince(_errorAt),
+                lastError: _lastError,
+                micMuted: muteLock.withLock { _micMuted })
+        }
+    }
+
+    /// Set MAI_DEBUG_CAPTURE=1 to trace the capture pipeline (per-source arrival, voiced
+    /// audio, bytes forwarded, errors), which is what distinguishes a dead microphone
+    /// from a silent one when transcription produces nothing.
+    nonisolated static func logCapture(_ message: String) {
+        guard ProcessInfo.processInfo.environment["MAI_DEBUG_CAPTURE"] == "1" else { return }
+        let stamp = String(format: "%.3f", Date().timeIntervalSince1970)
+        FileHandle.standardError.write(Data("Mai capture [\(stamp)] \(message)\n".utf8))
     }
 
     // Mute the local microphone: the user's own voice is not captured or transcribed,
@@ -121,17 +170,25 @@ public final class RealEars: Ears, @unchecked Sendable {
     func setAudioCapture(_ capture: AudioCapture) { audioCapture = capture }
     // Route audio through the VAD gate when present, else straight to the socket.
     func feedMic(_ data: Data) {
+        // Buffer arrival is recorded BEFORE mute and music rejection: those are Mai's own
+        // decisions to drop audio, not evidence that the microphone stopped working. Only
+        // mute skips the heartbeat, because a muted mic is expected to go quiet and the
+        // health policy accounts for it explicitly.
         if muteLock.withLock({ _micMuted }) { return }   // muted: drop mic audio entirely
+        noteCaptured(.user)
         if config.ambientFocusActive, config.ambientMusicRejection,
            AudioSceneClassifier.isLikelyMusicOnly(data, sampleRate: config.sttSampleRate,
                                                    speechThreshold: config.audioFocusAdjusted.echoSystemActiveRMS) {
             return
         }
-        noteCaptured()
         micVocal.ingest(data)
+        // One energy read serves two purposes: the liveness signal ("we can hear
+        // something") and the echo condition below.
+        let loud = AudioEnergy.isLoud(data, threshold: Float(config.echoSystemActiveRMS))
+        if loud { noteVoiced(.user) }
         // Echo detection at capture time: if the mic is loud WHILE the speaker was loud
         // a moment ago, mic and speaker overlap, i.e. the mic is hearing the speakers.
-        if config.echoSuppression, AudioEnergy.isLoud(data, threshold: Float(config.echoSystemActiveRMS)) {
+        if config.echoSuppression, loud {
             let now = Date()
             echoLock.withLock {
                 if now.timeIntervalSince(lastSystemLoudAt) < concurrencyWindow { lastConcurrentAt = now }
@@ -140,12 +197,12 @@ public final class RealEars: Ears, @unchecked Sendable {
         if let g = micGate { g.feed(data) } else { micClient?.sendAudio(data); noteSent(); recordTranscription(bytes: data.count) }
     }
     func feedSystem(_ data: Data) {
+        noteCaptured(.remote)
         if config.ambientFocusActive, config.ambientMusicRejection,
            AudioSceneClassifier.isLikelyMusicOnly(data, sampleRate: config.sttSampleRate,
                                                    speechThreshold: config.audioFocusAdjusted.echoSystemActiveRMS) {
             return
         }
-        noteCaptured()
         systemVocal.ingest(data)
         // "The speaker is playing" comes from the raw system-audio energy at capture,
         // not the downstream VAD flag (which has gaps during reconnects and offset lag).
@@ -227,7 +284,8 @@ public final class RealEars: Ears, @unchecked Sendable {
         // Carry Soniox's per-utterance detected language into the engine so a suggested
         // reply follows the language actually spoken, not the floor config.
         let event = TranscriptEvent(text: segment.text, speaker: speaker, timestamp: now,
-                                    isFinal: true, language: segment.language, vocalSignal: vocal)
+                                    isFinal: true, language: segment.language, vocalSignal: vocal,
+                                    source: source)
         cont.yield(event)
         let lang = segment.language.flatMap { Language(rawValue: $0) }
         // The translation line is shown only when it differs from the original (when the

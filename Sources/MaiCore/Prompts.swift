@@ -25,4 +25,5 @@ public enum Prompts {
     public static var notesWriter: String { load("notes-writer") }
     public static var notesVerify: String { load("notes-verify") }
     public static var notesTitle: String { load("notes-title") }
+    public static var coach: String { load("coach") }
 }

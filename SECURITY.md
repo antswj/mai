@@ -57,6 +57,11 @@ Step 2 adds the most sensitive surface yet: always-on audio and screen capture.
   append-only log is `data/verbatim.jsonl` (gitignored).
 - `exportSession` produces clean, general-purpose JSON so a user can take their own
   data out. There is no external sync.
+- Session transcripts are an on-disk artifact written only when the user turns the
+  session-transcript setting on or presses Save Transcript, only to the notes folder
+  the user chose. They contain exactly what the transcript view already showed. The
+  date-prefixed filename shape is gitignored so a notes folder inside a repo cannot
+  leak one.
 
 ## Action surface
 

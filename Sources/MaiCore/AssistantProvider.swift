@@ -20,7 +20,7 @@ public protocol AssistantProvider: Sendable {
     func reply(to userMessage: String, transcript: [MeetingLine], history: [ChatMessage], screen: String?) async throws -> String
 }
 
-// The Claude-backed assistant. Reuses the existing LLMProvider seam, so it inherits
+// The Anthropic-backed assistant. Reuses the existing LLMProvider seam, so it inherits
 // the configured Anthropic (or Groq) client. A different backend would implement
 // AssistantProvider directly instead.
 public struct AnthropicAssistant: AssistantProvider {

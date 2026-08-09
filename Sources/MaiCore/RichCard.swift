@@ -48,6 +48,16 @@ public struct RichResponse: Codable, Sendable, Equatable {
     public init(spoken: String, translation: String, language: Language, rationale: String?) {
         self.spoken = spoken; self.translation = translation; self.language = language; self.rationale = rationale
     }
+
+    /// Which language the reading aid should use. The tag wins, and the script is only a
+    /// fallback when the tag is the default `.en`. That order matters: ScriptDetect maps
+    /// Han-without-kana to zh, so trusting the script first would put pinyin over
+    /// all-kanji Japanese. Shared so the full app and the HUD cannot disagree, which they
+    /// previously did: an untagged Japanese reply got furigana in one and plain text in
+    /// the other.
+    public var rubyLanguage: Language {
+        language != .en ? language : ScriptDetect.language(of: spoken)
+    }
 }
 
 // Why Mai showed a card. Trust signals are deliberately small, local, and explainable:

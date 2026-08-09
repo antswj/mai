@@ -22,7 +22,16 @@ final class HUDPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        // No AppKit window shadow. On a borderless, fully transparent window AppKit derives
+        // the shadow from the alpha silhouette of the rendered content and CACHES it, and it
+        // does not recompute when that shape changes. The HUD's content changes shape
+        // constantly (cards animate in and out, the transcript grows, the split moves)
+        // inside a fixed-size panel much larger than the visible glass, so the cached shadow
+        // went stale and was painted as a ghost outline of an earlier shape. invalidateShadow()
+        // is the documented remedy but is reported broken for transparent borderless windows.
+        // The HUD draws its own shadow in SwiftUI (MissionHUDView), with outer padding left
+        // for it, so this one is redundant as well as wrong.
+        hasShadow = false
         isMovableByWindowBackground = true
         animationBehavior = .utilityWindow
     }

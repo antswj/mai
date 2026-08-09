@@ -8,6 +8,8 @@ public struct RollingContext: Sendable {
         public let speaker: String?
         public let text: String
         public let timestamp: Date
+        public let language: String?
+        public let source: SpeakerSource?
     }
 
     private var turns: [Turn] = []
@@ -20,7 +22,8 @@ public struct RollingContext: Sendable {
     }
 
     public mutating func append(_ event: TranscriptEvent) {
-        turns.append(Turn(speaker: event.speaker, text: event.text, timestamp: event.timestamp))
+        turns.append(Turn(speaker: event.speaker, text: event.text, timestamp: event.timestamp,
+                          language: event.language, source: event.source ?? event.vocalSignal?.source))
         prune(now: event.timestamp)
     }
 
@@ -37,8 +40,12 @@ public struct RollingContext: Sendable {
         renderedTurns().joined(separator: "\n")
     }
 
-    public func window(maxChars: Int) -> String {
-        let rendered = renderedTurns()
+    /// `tagged` adds a per-line "(who, language)" marker for the coach, which otherwise
+    /// has to infer both from the script. The UNTAGGED form is the classifier's input and
+    /// must stay byte-identical: the deterministic stub parses it by splitting on the
+    /// first colon, so a tag in the default form would corrupt every classifier fixture.
+    public func window(maxChars: Int, tagged: Bool = false) -> String {
+        let rendered = renderedTurns(tagged: tagged)
         let full = rendered.joined(separator: "\n")
         guard maxChars > 0 else { return "" }
         guard full.count > maxChars else { return full }
@@ -65,10 +72,15 @@ public struct RollingContext: Sendable {
         return prefixed.count <= maxChars ? prefixed : String(prefixed.prefix(maxChars))
     }
 
-    private func renderedTurns() -> [String] {
+    private func renderedTurns(tagged: Bool = false) -> [String] {
         turns.map { t in
             let who = t.speaker?.isEmpty == false ? t.speaker! : "Speaker"
-            return "\(who): \(t.text)"
+            guard tagged else { return "\(who): \(t.text)" }
+            var marks: [String] = []
+            if let s = t.source { marks.append(s == .user ? "you" : "other") }
+            if let l = t.language, !l.isEmpty { marks.append(l) }
+            let tag = marks.isEmpty ? "" : " (\(marks.joined(separator: ", ")))"
+            return "\(who)\(tag): \(t.text)"
         }
     }
 

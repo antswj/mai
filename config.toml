@@ -11,7 +11,6 @@ classifier = "claude-haiku-4-5"
 drafter    = "claude-sonnet-4-6"
 router     = "claude-haiku-4-5"    # fast lookup-route classifier (card brain); everything downstream waits on it
 screen     = "gemini-2.5-flash"   # Gemini vision model for screen reads (smoke test now, eyes later)
-# claude-opus-4-8 is available for heavy reasoning.
 # If providers.llm = "groq", set classifier/drafter to model ids enabled on that account.
 
 [stt]
@@ -52,6 +51,10 @@ max_seconds = 120
 threshold = 0.6
 show_suppressed_log = true
 refire_cooldown_seconds = 90
+adaptive_quiet = true             # learns from feedback and recent card density
+adaptive_quiet_window_seconds = 90
+adaptive_quiet_max_visible_cards = 4
+adaptive_quiet_learning_strength = 1.0
 
 [triggers]
 enabled = ["place", "question", "intent", "reference", "screenReference"]
@@ -77,6 +80,9 @@ start_paused = false             # always-on by default; user can pause anytime
 show_live = true                 # the always-on lyrics-style live transcript view
 ruby = true                      # furigana over kanji, pinyin over hanzi, as true ruby
 
+[appearance]
+liquid_glass = 0.72              # 0 = denser/calmer, 1 = clearest/glassiest
+
 [vad]
 # On-device voice-activity gating so always-on capture only pays for transcription
 # while someone is actually speaking. Silero VAD v5 runs locally (no network); each
@@ -88,6 +94,18 @@ onset = 0.5                       # speech-probability threshold to open the gat
 offset = 0.35                     # probability below which audio counts as silence (hysteresis vs onset)
 silence_hangover_seconds = 4      # sustained silence before tearing the stream down (avoids flapping on pauses)
 preroll_seconds = 1.0             # pre-onset audio kept in a ring buffer and flushed so the first word is not clipped
+
+[session]
+# A session is the logical unit Mai groups a conversation into. It ends when you stop it,
+# when you start a new one, or automatically after a long idle stretch or a very long run.
+auto_rollover = true
+idle_rollover_seconds = 1200        # 20 minutes idle ends the session and starts a fresh one
+max_seconds = 14400                 # 4 hours
+# Write a plain transcript (no write-up, no model call) to your notes folder every time a
+# session ends. Off by default: transcripts are a document about a real conversation, so
+# they are written only when you ask for them. Note-taking sessions already save a
+# transcript, so they are never written twice. Also available in Settings, Sessions.
+save_transcript = false
 
 [coaching]
 # Live coaching has two layers: instant local cues and a slower AI vocal-analysis pass.

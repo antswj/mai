@@ -44,7 +44,8 @@ struct CardStreamView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(flowing) { card in
-                            RichCardRow(card: card, ruby: model.config.ruby) {
+                            RichCardRow(card: card, ruby: model.config.ruby,
+                                        glassAmount: model.config.liquidGlassAmount) {
                                 FeedbackButtons(model: model, card: card)
                                 Button { model.pin(card) } label: { Image(systemName: "pin") }
                                     .buttonStyle(.plain).help("Pin this card").accessibilityLabel("Pin card")
@@ -87,7 +88,8 @@ struct PinnedCarouselView: View {
             if count > 0 {
                 let card = model.pinnedCards[index]
                 ScrollView {
-                    RichCardRow(card: card, ruby: model.config.ruby) {
+                    RichCardRow(card: card, ruby: model.config.ruby,
+                                glassAmount: model.config.liquidGlassAmount) {
                         FeedbackButtons(model: model, card: card)
                         Button { model.toggleNoteCard(card) } label: {
                             Image(systemName: model.isNoted(card.id) ? "note.text.badge.plus" : "note.text")
@@ -129,10 +131,12 @@ struct PinnedCarouselView: View {
 struct RichCardRow<Controls: View>: View {
     let card: RichCard
     var ruby: Bool = true
+    var glassAmount: Double = 0.72
     @ViewBuilder var controls: Controls
 
-    init(card: RichCard, ruby: Bool = true, @ViewBuilder controls: () -> Controls = { EmptyView() }) {
-        self.card = card; self.ruby = ruby; self.controls = controls()
+    init(card: RichCard, ruby: Bool = true, glassAmount: Double = 0.72,
+         @ViewBuilder controls: () -> Controls = { EmptyView() }) {
+        self.card = card; self.ruby = ruby; self.glassAmount = glassAmount; self.controls = controls()
     }
 
     var body: some View {
@@ -169,8 +173,12 @@ struct RichCardRow<Controls: View>: View {
 
             // The answer, in the interface language.
             if let info = card.info, !info.isEmpty {
-                Text(info).font(.system(.body)).textSelection(.enabled)
-                    .foregroundStyle(card.suppressed ? .secondary : .primary)
+                if card.route == .sessionOperator {
+                    SessionRecapView(text: info, compact: false)
+                } else {
+                    Text(info).font(.system(.body)).textSelection(.enabled)
+                        .foregroundStyle(card.suppressed ? .secondary : .primary)
+                }
                 // A model fallback (no source found) is labeled, never dressed up as sourced.
                 if card.unverified {
                     Label("Unverified (no source found)", systemImage: "exclamationmark.triangle")
@@ -231,12 +239,79 @@ struct RichCardRow<Controls: View>: View {
         }
         .padding(10)
         .spatialContentTile(in: RoundedRectangle(cornerRadius: 8, style: .continuous),
-                            tint: tierColor, suppressed: card.suppressed)
+                            tint: tierColor, suppressed: card.suppressed,
+                            glassAmount: glassAmount)
         .opacity(card.suppressed ? 0.7 : 1)
     }
 
     private var tierColor: Color {
         switch card.tier { case .critical: return .red; case .medium: return .blue; case .noise: return .gray }
+    }
+}
+
+struct SessionRecapView: View {
+    let text: String
+    var compact: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+            ForEach(Array(sections.prefix(compact ? 3 : sections.count).enumerated()), id: \.offset) { _, section in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: icon(for: section.title))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 14)
+                        Text(section.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(section.bullets.prefix(compact ? 2 : section.bullets.count).enumerated()), id: \.offset) { _, bullet in
+                        HStack(alignment: .top, spacing: 6) {
+                            Circle()
+                                .fill(Color.secondary.opacity(0.55))
+                                .frame(width: 3, height: 3)
+                                .padding(.top, 7)
+                            Text(bullet)
+                                .font(compact ? .caption : .callout)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                if !compact && section.title != sections.last?.title {
+                    Divider().opacity(0.18)
+                }
+            }
+        }
+    }
+
+    private var sections: [(title: String, bullets: [String])] {
+        let blocks = text.components(separatedBy: "\n\n")
+        return blocks.compactMap { block in
+            let lines = block.split(separator: "\n").map(String.init)
+            guard let title = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            let bullets = lines.dropFirst().map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "^-\\s*", with: "", options: .regularExpression)
+            }.filter { !$0.isEmpty }
+            return bullets.isEmpty ? nil : (title, bullets)
+        }
+    }
+
+    private func icon(for title: String) -> String {
+        switch title.lowercased() {
+        case let t where t.contains("snapshot"): return "doc.text"
+        case let t where t.contains("decision"): return "checkmark.seal"
+        case let t where t.contains("follow"): return "arrow.triangle.branch"
+        case let t where t.contains("question"): return "questionmark.circle"
+        case let t where t.contains("link"): return "link"
+        case let t where t.contains("replay"): return "play.circle"
+        case let t where t.contains("close"): return "paperplane"
+        default: return "note.text"
+        }
     }
 }
 
@@ -301,11 +376,9 @@ struct ResponseBlock: View {
     let response: RichResponse
     var ruby: Bool
 
-    // Render ruby whenever the reply text is actually CJK, trusting the response's
-    // language tag but falling back to detecting the script from the text.
-    private var effectiveLanguage: Language {
-        response.language != .en ? response.language : ScriptDetect.language(of: response.spoken)
-    }
+    // Ruby whenever the reply text is actually CJK. The tag-first, script-fallback rule
+    // lives on RichResponse so this view and the HUD cannot disagree.
+    private var effectiveLanguage: Language { response.rubyLanguage }
     private var useRuby: Bool { ruby && effectiveLanguage != .en && !response.spoken.isEmpty }
 
     var body: some View {

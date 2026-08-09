@@ -66,6 +66,9 @@ public actor Engine {
     private var currentScreenBundleIdentifier: String?
     private var currentScreenWindowTitle: String?
     private var recentCoaching: [String: Date] = [:]
+    // When a prepared-reply card was last produced. Coach replies stand down near it so
+    // the user never sees two competing suggested replies for the same moment.
+    private var lastPreparedReplyAt: Date?
 
     public var sessionId: String { session.id }
 
@@ -141,7 +144,10 @@ public actor Engine {
         context.append(event)
         save(record(kind: "transcript", content: event.text, language: nil, speaker: event.speaker, at: event.timestamp))
         verbatim.appendTranscript(event, sessionId: session.id)
-        maybeSurfaceCoaching(event: event, window: context.window(maxChars: 2_000), t0: t0)
+        // The coach gets the tagged window (who spoke, in what language, per line) so it is
+        // not left inferring both from the script. The classifier's window below is the
+        // untagged form and is unchanged.
+        maybeSurfaceCoaching(event: event, window: context.window(maxChars: 2_000, tagged: true), t0: t0)
 
         // Bound the classifier call so a hung LLM request can never freeze the
         // always-on loop (a freeze here would stop every card until it unblocked).
@@ -227,6 +233,9 @@ public actor Engine {
             route = .preparedReply
             request = .preparedReply(context: window, asker: trigger.payload["speaker"], spoken: spoken)
             pending = [RichCard.Part.response.rawValue]
+            // Reached only after the responseEnabled gate above, so this marks a prepared
+            // reply that is actually being produced.
+            lastPreparedReplyAt = event.timestamp
         case .question, .intent:
             route = .pending
             request = .knowledge(topic: topic.isEmpty ? trigger.span : topic, window: window,
@@ -374,9 +383,23 @@ public actor Engine {
         }
     }
 
+    private func preparedReplyRecent(at now: Date) -> Bool {
+        lastPreparedReplyAt.map { now.timeIntervalSince($0) < 30 } ?? false
+    }
+
+    // Set MAI_DEBUG_COACH=1 to see the language, who spoke, and whether a reply was
+    // produced. This is the only way to follow the feature live.
+    nonisolated static func logCoach(spoken: Language, source: SpeakerSource?, allowed: Bool, hasReply: Bool) {
+        guard ProcessInfo.processInfo.environment["MAI_DEBUG_COACH"] == "1" else { return }
+        let who = source.map { $0 == .user ? "user" : "remote" } ?? "unknown"
+        FileHandle.standardError.write(Data(
+            "Mai coach: spoken=\(spoken.rawValue) source=\(who) allow=\(allowed ? "yes" : "no") reply=\(hasReply ? "yes" : "no")\n".utf8))
+    }
+
     private func maybeSurfaceCoaching(event: TranscriptEvent, window: String, t0: Date) {
         guard richSink != nil, !chatOpen else { return }
-        if let insight = ConversationCoach.insight(for: event, window: window) {
+        if let insight = ConversationCoach.insight(for: event, window: window,
+                                                   interfaceLanguage: config.interfaceLanguage) {
             if recentCoaching[insight.key].map({ event.timestamp.timeIntervalSince($0) >= 90 }) ?? true {
                 recentCoaching[insight.key] = event.timestamp
                 surfaceCoaching(insight, event: event, t0: t0)
@@ -395,21 +418,33 @@ public actor Engine {
         let interval = max(10, config.coachingAIMinIntervalSeconds)
         if let last = recentCoaching[key], event.timestamp.timeIntervalSince(last) < interval { return }
         recentCoaching[key] = event.timestamp
-        Task { [event, window, t0] in
-            await self.surfaceAICoaching(event: event, window: window, t0: t0)
+        // Coach replies ride the SAME opt-in as every other path where Mai proposes words
+        // for the user to say, and stand down when a prepared-reply card already covered
+        // this moment (checked again after the await, for the same-turn race).
+        let suggestReplies = config.responseEnabled && !preparedReplyRecent(at: event.timestamp)
+        Task { [event, window, t0, suggestReplies] in
+            await self.surfaceAICoaching(event: event, window: window, t0: t0, suggestReplies: suggestReplies)
         }
     }
 
-    private func surfaceAICoaching(event: TranscriptEvent, window: String, t0: Date) async {
+    private func surfaceAICoaching(event: TranscriptEvent, window: String, t0: Date,
+                                   suggestReplies: Bool) async {
         guard richSink != nil, !chatOpen else { return }
         let started = Date()
         let cap = max(2, config.coachingAICapSeconds)
         let model = config.coachingAIModel.isEmpty ? config.lookupRouterModel : config.coachingAIModel
-        guard let insight = await withTimeoutOrNil(seconds: cap, { [llm, config] in
+        let spoken = Self.spokenLanguage(of: event)
+        guard let raw = await withTimeoutOrNil(seconds: cap, { [llm, config] in
             try await ConversationCoach.requireAIInsight(
                 for: event, window: window, llm: llm, model: model,
-                interfaceLanguage: config.interfaceLanguage)
+                interfaceLanguage: config.interfaceLanguage,
+                spokenLanguage: spoken, suggestReplies: suggestReplies)
         }) else { return }
+        // A prepared reply may have landed while this call was in flight. Drop the coach's
+        // reply, keep its analysis, so the user never sees two competing suggested replies.
+        let insight = preparedReplyRecent(at: Date()) ? raw.withoutResponse() : raw
+        Self.logCoach(spoken: spoken, source: ConversationCoach.speakerSource(of: event),
+                      allowed: suggestReplies, hasReply: insight.response != nil)
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         surfaceCoaching(insight, event: event, t0: t0,
                         note: "AI voice coaching",
@@ -420,7 +455,7 @@ public actor Engine {
                                  note: String? = nil, timings: [String: Int] = [:]) {
         var card = RichCard(trigger: .intent, timestamp: event.timestamp, route: .coaching,
                             tier: insight.tier, score: insight.score, headline: insight.headline,
-                            info: insight.info, pending: [],
+                            info: insight.info, response: insight.response, pending: [],
                             timings: timings,
                             latencyMs: Int(Date().timeIntervalSince(t0) * 1000),
                             note: note,

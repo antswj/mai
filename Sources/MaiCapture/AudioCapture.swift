@@ -89,6 +89,7 @@ enum CaptureContent {
 public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let sampleRate: Int
     private let onPCM: @Sendable (SpeakerSource, Data) -> Void
+    private let onStreamError: (@Sendable (String) -> Void)?
     private var stream: SCStream?
     private let systemQueue = DispatchQueue(label: "mai.audio.system", qos: .userInitiated)
     private let micQueue = DispatchQueue(label: "mai.audio.mic", qos: .userInitiated)
@@ -96,9 +97,12 @@ public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     private let micConverter: PCM16Converter
     private var activity: NSObjectProtocol?
 
-    public init(sampleRate: Int, onPCM: @escaping @Sendable (SpeakerSource, Data) -> Void) {
+    public init(sampleRate: Int,
+                onPCM: @escaping @Sendable (SpeakerSource, Data) -> Void,
+                onStreamError: (@Sendable (String) -> Void)? = nil) {
         self.sampleRate = sampleRate
         self.onPCM = onPCM
+        self.onStreamError = onStreamError
         self.systemConverter = PCM16Converter(sampleRate: sampleRate)
         self.micConverter = PCM16Converter(sampleRate: sampleRate)
         super.init()
@@ -165,7 +169,11 @@ public final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
-        // Surfaced to the app via capture state on next start; nothing to do live.
+        // A stream that stops on its own (display reconfiguration, a revoked grant, an
+        // internal ScreenCaptureKit error) delivers no further buffers. Reporting it is
+        // what lets the watchdog and the user see the difference between a dead capture
+        // stack and a quiet room.
+        onStreamError?(error.localizedDescription)
     }
 
     // MARK: - private

@@ -55,7 +55,23 @@ final class AppModel: ObservableObject {
     @Published var micMuted: Bool = false               // mute the local mic (keep system audio + screen)
     @Published var expandedCardIds: Set<String> = []    // HUD cards expanded to full detail
     @Published var status: String = ""
+    // A capture fault a restart cannot fix (dead mic leg, rejected transcription key,
+    // audio heard but never forwarded). Nil when the pipeline is healthy. Shown in the
+    // Health tab so "Capturing" can never again mean "transcribing nothing".
+    @Published var captureHealthNote: String?
+    // Raw liveness ages behind the note, so the health rules are observable rather than
+    // taken on faith (for example whether the mic is hearing anything at all).
+    @Published var captureHealthDetail: String?
+    // True only for a real fault. A long quiet stretch is normal for an always-on
+    // assistant, so it must not be dressed as a warning.
+    @Published var captureHealthIsFault = false
     @Published var headphonesTip = false                // one-time tip: headphones remove echo
+    // The just-ended session's transcript, kept so the manual save still works after a
+    // rollover has cleared the live buffer.
+    @Published private(set) var lastEndedSession: SessionTranscriptDraft?
+    // Published mirror of the private transcript buffer, so the Save Transcript button
+    // knows whether there is anything to save.
+    @Published private(set) var sessionTranscriptLineCount = 0
     @Published private(set) var sessionActive = false
     @Published private(set) var sessionStartedAt: Date?
     @Published private(set) var sessionEndedAt: Date?
@@ -95,7 +111,7 @@ final class AppModel: ObservableObject {
     // The live-transcript translation provider (Soniox same-stream now; swappable).
     private(set) var translation: TranslationProvider
 
-    private(set) var config: Config
+    @Published private(set) var config: Config
     private let secrets: Secrets
     private let store: MemoryStore
     private let verbatim: VerbatimLog
@@ -114,13 +130,30 @@ final class AppModel: ObservableObject {
     private var watchdogTask: Task<Void, Never>?
     private var captureRetryTask: Task<Void, Never>?
     private var traceReplayTask: Task<Void, Never>?
+    private var sessionTranscriptTruncated = false
+    private static let sessionTranscriptAutoSaveKey = "mai.sessionTranscriptAutoSave"
+    private static let transcriptHintKey = "mai.transcriptSaveHintShown"
     private var lastRestartAt = Date.distantPast
+    // Restarts spent trying to revive a dead microphone leg. Bounded, so a permission or
+    // device fault reports itself instead of restarting capture forever.
+    private var micRecoveryAttempts = 0
+    private var lastMicRestartAt = Date.distantPast
     private var traceEvents: [MaiTraceEvent] = []
+    private var sessionTranscriptLines: [MeetingLine] = []
 
     let fixtures = ["meeting_ja_en.txt", "meeting_zh.txt", "casual.txt"]
+    private static let liquidGlassAmountKey = "mai.liquidGlassAmount"
 
     init() {
-        let config = Config.load()
+        var config = Config.load()
+        // The object(forKey:) probe is what lets config.toml set a non-default that the
+        // user has never overridden in Settings.
+        if UserDefaults.standard.object(forKey: Self.sessionTranscriptAutoSaveKey) != nil {
+            config.sessionTranscriptAutoSave = UserDefaults.standard.bool(forKey: Self.sessionTranscriptAutoSaveKey)
+        }
+        if UserDefaults.standard.object(forKey: Self.liquidGlassAmountKey) != nil {
+            config.liquidGlassAmount = min(1.0, max(0.0, UserDefaults.standard.double(forKey: Self.liquidGlassAmountKey)))
+        }
         self.config = config
         self.secrets = Secrets()
         // A shipped app launched from /Applications has cwd "/", so repo-relative
@@ -392,6 +425,7 @@ final class AppModel: ObservableObject {
                                           language: event.language.flatMap(Language.init(rawValue:)),
                                           isFinal: true)
             liveLines.append(line)
+            recordSessionLine(line, at: event.timestamp)
             if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
         case .screen(let event):
             status = "Trace screen: \(event.subject ?? "screen")"
@@ -433,11 +467,105 @@ final class AppModel: ObservableObject {
         assistantThinking = false
         traceEvents.removeAll()
         traceEventCount = 0
+        sessionTranscriptLines.removeAll()
+        sessionTranscriptLineCount = 0
+        sessionTranscriptTruncated = false
         lastActivityAt = now
     }
 
     var hasSessionContent: Bool {
         !liveLines.isEmpty || richItems.contains { !$0.suppressed } || !pinnedCards.isEmpty
+    }
+
+    // MARK: - Session transcript
+
+    // Called from every path that ends a LOGICAL session (stop, start-new, auto-rollover),
+    // before the visible state is reset. Not from stopSession(), which is capture teardown
+    // and fires on every config change and watchdog restart.
+    //
+    // `noteTakingSaved` must be captured by the caller BEFORE it calls stopNoteTaking(),
+    // which clears the flag synchronously. When note-taking was on, its pipeline owns the
+    // artifact for this session and this writes nothing, so there is never a duplicate.
+    //
+    // Returns a status fragment to append, or nil when there is nothing worth saying.
+    @discardableResult
+    func finalizeSession(reason: SessionEndReason, noteTakingSaved: Bool, now: Date = Date()) -> String? {
+        // Only a live session can be finalized. This is what stops a second save when
+        // startNewSession or resume follows a stop: the lines are still in memory, because
+        // nothing has cleared them yet.
+        guard sessionActive else { return nil }
+
+        let draft = SessionTranscriptDraft(lines: sessionTranscriptLines,
+                                           startedAt: sessionStartedAt ?? now,
+                                           endedAt: now,
+                                           reason: reason,
+                                           truncated: sessionTranscriptTruncated)
+        // Kept so the manual Save Transcript button still works after a rollover has
+        // cleared the live buffer.
+        if !draft.lines.isEmpty { lastEndedSession = draft }
+
+        let decision = SessionTranscriptPolicy.decide(enabled: config.sessionTranscriptAutoSave,
+                                                      noteTakingSaved: noteTakingSaved,
+                                                      lineCount: draft.lines.count,
+                                                      hasFolder: notesFolder != nil)
+        var hint = false
+        let outcome: SessionTranscriptOutcome
+        switch decision {
+        case .save:
+            outcome = writeTranscriptDraft(draft)
+        default:
+            // Mention the setting once, the first time it would actually have saved something.
+            if decision == .skipDisabled, !draft.lines.isEmpty,
+               !UserDefaults.standard.bool(forKey: Self.transcriptHintKey) {
+                UserDefaults.standard.set(true, forKey: Self.transcriptHintKey)
+                hint = true
+            }
+            outcome = .skipped(decision)
+        }
+        return SessionTranscriptStatus.fragment(for: outcome, includeSetupHint: hint)
+    }
+
+    private func writeTranscriptDraft(_ draft: SessionTranscriptDraft) -> SessionTranscriptOutcome {
+        guard let folder = notesFolder else { return .skipped(.skipNoFolder) }
+        do {
+            guard let saved = try SessionTranscriptWriter.save(draft: draft, to: folder) else {
+                return .skipped(.skipEmpty)
+            }
+            lastEndedSession?.savedFileName = saved.fileName
+            refreshSavedMeetings()
+            return .saved(fileName: saved.fileName)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// Manual save, for the session that just ended or the one still running.
+    func saveSessionTranscriptNow() {
+        let draft: SessionTranscriptDraft
+        if let ended = lastEndedSession, ended.savedFileName == nil, !ended.lines.isEmpty {
+            draft = ended
+        } else if !sessionTranscriptLines.isEmpty {
+            draft = SessionTranscriptDraft(lines: sessionTranscriptLines,
+                                           startedAt: sessionStartedAt ?? Date(),
+                                           endedAt: Date(),
+                                           reason: .stopped,
+                                           truncated: sessionTranscriptTruncated)
+        } else {
+            status = "Nothing to save (no transcript was captured)."
+            return
+        }
+        guard notesFolder != nil else {
+            status = SessionTranscriptStatus.fragment(for: .skipped(.skipNoFolder), includeSetupHint: false) ?? ""
+            return
+        }
+        let outcome = writeTranscriptDraft(draft)
+        if case .saved(let fileName) = outcome, lastEndedSession == nil {
+            // A manual save of the live session records the name so the button can show it.
+            lastEndedSession = SessionTranscriptDraft(lines: draft.lines, startedAt: draft.startedAt,
+                                                      endedAt: draft.endedAt, reason: draft.reason,
+                                                      truncated: draft.truncated, savedFileName: fileName)
+        }
+        status = SessionTranscriptStatus.fragment(for: outcome, includeSetupHint: false) ?? status
     }
 
     var sessionLabel: String {
@@ -451,21 +579,26 @@ final class AppModel: ObservableObject {
         let wasNoteTaking = noteTaking
         if wasNoteTaking { stopNoteTaking() }
         stopSession()
+        // Before sessionActive is cleared: finalizeSession guards on it, which is what
+        // stops a second save if startNewSession or resume follows a stop.
+        let fragment = finalizeSession(reason: .stopped, noteTakingSaved: wasNoteTaking)
         sessionActive = false
         sessionEndedAt = Date()
         captureState = .paused
-        status = "Session stopped. Start a new session when you're ready."
+        status = "Session stopped. " + (fragment ?? "Start a new session when you're ready.")
         if !wasNoteTaking { surfaceSessionOperator(savedTitle: nil) }
     }
 
     func startNewSession() {
         let keepSimulated = useSimulated
-        if noteTaking { stopNoteTaking() }
+        let wasNoteTaking = noteTaking
+        if wasNoteTaking { stopNoteTaking() }
         stopSession()
+        let fragment = finalizeSession(reason: .newSession, noteTakingSaved: wasNoteTaking)
         resetVisibleSessionState()
         useSimulated = keepSimulated
         startSession(forcePaused: false, resetLogicalSession: true)
-        status = "Started a new session."
+        status = "Started a new session." + (fragment.map { " " + $0 } ?? "")
     }
 
     func autoSessionTick(now: Date = Date()) {
@@ -486,12 +619,14 @@ final class AppModel: ObservableObject {
     private func rotateSessionAutomatically(reason: String, now: Date) {
         guard sessionActive else { return }
         let keepSimulated = useSimulated
-        if noteTaking { stopNoteTaking() }
+        let wasNoteTaking = noteTaking
+        if wasNoteTaking { stopNoteTaking() }
         stopSession()
+        let fragment = finalizeSession(reason: .rolledOver(reason), noteTakingSaved: wasNoteTaking, now: now)
         resetVisibleSessionState(now: now)
         useSimulated = keepSimulated
         startSession(forcePaused: false, resetLogicalSession: true)
-        status = "Started a new session automatically: \(reason)."
+        status = "Started a new session automatically: \(reason)." + (fragment.map { " " + $0 } ?? "")
     }
 
     // Upsert a rich card by id: first emit inserts the skeleton (newest first), later
@@ -517,17 +652,34 @@ final class AppModel: ObservableObject {
     }
 
     private func applyingFeedbackThreshold(to incoming: RichCard) -> RichCard {
-        guard incoming.pending.isEmpty, let rating = incoming.rating else { return incoming }
         var card = incoming
         let threshold = feedbackSummary.adjustedUsefulThreshold(for: card.route)
         let feedbackNote = "below feedback threshold"
-        if rating.score < threshold, !card.suppressed {
-            card.suppressed = true
-            card.tier = .noise
-            card.note = "\(feedbackNote): \(String(format: "%.2f", rating.score)) < \(String(format: "%.2f", threshold))"
-        } else if card.note?.hasPrefix(feedbackNote) == true, rating.score >= threshold {
-            card.suppressed = false
-            card.note = nil
+        var suppressedByFeedback = false
+        if card.pending.isEmpty, let rating = card.rating {
+            if rating.score < threshold, !card.suppressed {
+                card.suppressed = true
+                card.tier = .noise
+                card.note = "\(feedbackNote): \(String(format: "%.2f", rating.score)) < \(String(format: "%.2f", threshold))"
+                suppressedByFeedback = true
+            } else if card.note?.hasPrefix(feedbackNote) == true, rating.score >= threshold {
+                card.suppressed = false
+                card.note = nil
+            }
+        }
+        if !suppressedByFeedback {
+            let quiet = AdaptiveQuietPolicy.decision(for: card,
+                                                     recentCards: richItems + pinnedCards,
+                                                     feedbackSummary: feedbackSummary,
+                                                     config: config)
+            if quiet.suppress, !card.suppressed {
+                card.suppressed = true
+                card.tier = .noise
+                card.note = quiet.reason
+            } else if AdaptiveQuietPolicy.isAdaptiveQuietNote(card.note) {
+                card.suppressed = false
+                card.note = nil
+            }
         }
         return card
     }
@@ -632,6 +784,24 @@ final class AppModel: ObservableObject {
         rebuildSessionPreservingPause()
     }
 
+    func updateAppearanceConfig(_ mutate: (inout Config) -> Void) {
+        var c = config; mutate(&c); config = c
+        UserDefaults.standard.set(c.liquidGlassAmount, forKey: Self.liquidGlassAmountKey)
+    }
+
+    // Session settings persist and do NOT rebuild the engine or capture stack (unlike
+    // updateConfig, which does both and persists neither).
+    func updateSessionConfig(_ mutate: (inout Config) -> Void) {
+        var c = config; mutate(&c); config = c
+        UserDefaults.standard.set(c.sessionTranscriptAutoSave, forKey: Self.sessionTranscriptAutoSaveKey)
+    }
+
+    func updateQuietConfig(_ mutate: (inout Config) -> Void) {
+        var c = config; mutate(&c); config = c
+        richItems = richItems.map { applyingFeedbackThreshold(to: $0) }
+        pinnedCards = pinnedCards.map { applyingFeedbackThreshold(to: $0) }
+    }
+
     func setLaunchAtLogin(_ on: Bool) {
         do { if on { try LoginItem.enable() } else { try LoginItem.disable() } }
         catch { status = "Could not change Login Item: \(error.localizedDescription)" }
@@ -723,13 +893,45 @@ final class AppModel: ObservableObject {
 
     private func watchdogTick() {
         guard captureState == .capturing, let ears = realEars else { return }
-        guard Date().timeIntervalSince(lastRestartAt) > 30 else { return }   // backoff between kicks
-        let h = ears.health()
-        if h.capturedAgo > 12 {
-            kick("capture stalled (no audio for \(Int(h.capturedAgo))s)")
-        } else if h.sentAgo < 6 && h.transcriptAgo > 20 {
-            // Audio is being sent but Soniox has gone quiet: reconnect the pipeline.
-            kick("transcription stalled (audio flowing, no transcript for \(Int(h.transcriptAgo))s)")
+        var input = ears.liveness()
+        input.micRecoveryAttempts = micRecoveryAttempts
+        switch CaptureHealthPolicy.verdict(input) {
+        case .healthy:
+            captureHealthNote = nil
+            captureHealthDetail = nil
+            captureHealthIsFault = false
+            // Forgive spent recovery attempts only after a long healthy stretch. A
+            // restart resets the liveness clocks, so resetting the budget on the very
+            // next healthy tick would refill it every time and restart capture forever on
+            // a mic that keeps dying.
+            if micRecoveryAttempts > 0, Date().timeIntervalSince(lastMicRestartAt) > 1_800 {
+                micRecoveryAttempts = 0
+            }
+        case .warn(let message):
+            // A restart cannot fix this (or would flap), so report it instead of looping.
+            // Only publish on change so the status line is not rewritten every tick.
+            if captureHealthNote != message {
+                captureHealthNote = message
+                captureHealthDetail = CaptureHealthPolicy.detail(input)
+                captureHealthIsFault = true
+                status = message
+                FileHandle.standardError.write(Data("Mai capture health: \(message)\n".utf8))
+            }
+        case .notice(let message):
+            // Informational: the Health tab only. It never touches the status line, so a
+            // normal quiet stretch cannot displace "Capturing" or look like an error.
+            if captureHealthNote != message {
+                captureHealthNote = message
+                captureHealthDetail = CaptureHealthPolicy.detail(input)
+                captureHealthIsFault = false
+            }
+        case .restart(let why):
+            guard Date().timeIntervalSince(lastRestartAt) > 30 else { return }   // backoff between kicks
+            if why.hasPrefix("microphone stopped") {
+                micRecoveryAttempts += 1
+                lastMicRestartAt = Date()
+            }
+            kick(why)
         }
     }
 
@@ -837,7 +1039,7 @@ final class AppModel: ObservableObject {
             liveLines.removeAll { $0.id == partialID(line.source) }
             liveLines.append(line)
             if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
-            feedNote(line)
+            recordSessionLine(line)
             translateLineIfNeeded(line)
         } else {
             // Upsert the single in-flight partial line for this source.
@@ -895,7 +1097,7 @@ final class AppModel: ObservableObject {
                                       text: text, language: config.floorLanguage, isFinal: true)
         liveLines.append(line)
         if liveLines.count > 200 { liveLines.removeFirst(liveLines.count - 200) }
-        feedNote(line)
+        recordSessionLine(line)
     }
 
     func injectScreen(_ text: String) {
@@ -967,7 +1169,7 @@ final class AppModel: ObservableObject {
                         let l = LiveTranscriptLine(id: UUID().uuidString, speaker: speaker ?? "You",
                                                    source: .user, text: body, language: floor, isFinal: true)
                         self.liveLines.append(l)
-                        self.feedNote(l)
+                        self.recordSessionLine(l)
                     }
                 }
                 try? await Task.sleep(nanoseconds: 60_000_000)
@@ -993,19 +1195,28 @@ final class AppModel: ObservableObject {
     @Published var keyStatus: [String: String] = [:]
     var onMeetingFinished: ((MeetingExport) -> Void)?
 
-    private func feedNote(_ line: LiveTranscriptLine) {
-        guard noteTaking, line.isFinal else { return }
+    private func recordSessionLine(_ line: LiveTranscriptLine, at timestamp: Date = Date()) {
+        guard line.isFinal, !line.id.hasPrefix("live-") else { return }
         let ml = MeetingLine(speaker: line.speaker, isUser: line.source == .user, text: line.text,
-                             timestamp: Date(), language: line.language?.rawValue)
+                             timestamp: timestamp, language: line.language?.rawValue)
+        sessionTranscriptLines.append(ml)
+        if sessionTranscriptLines.count > SessionTranscript.lineCap {
+            sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - SessionTranscript.lineCap)
+            sessionTranscriptTruncated = true   // the saved transcript says so, rather than quietly losing lines
+        }
+        sessionTranscriptLineCount = sessionTranscriptLines.count
+        feedNote(ml)
+    }
+
+    private func feedNote(_ line: MeetingLine) {
+        guard noteTaking else { return }
         let notes = notes
-        Task { await notes.add(ml) }
+        Task { await notes.add(line) }
     }
 
     // The meeting transcript so far, for assistant context (order-preserving).
     private func meetingTranscript() -> [MeetingLine] {
-        liveLines.filter { $0.isFinal && !$0.id.hasPrefix("live-") }
-            .map { MeetingLine(speaker: $0.speaker, isUser: $0.source == .user, text: $0.text,
-                               timestamp: Date(), language: $0.language?.rawValue) }
+        sessionTranscriptLines
     }
 
     // MARK: - Chat with the assistant
@@ -1097,9 +1308,10 @@ final class AppModel: ObservableObject {
 
     func openSavedMeeting(_ entry: MeetingIndexEntry) {
         guard let folder = notesFolder else { return }
-        let url = folder.appendingPathComponent(entry.docxFileName)
+        // A transcript-only row has no .docx, so open its .md instead.
+        let url = folder.appendingPathComponent(entry.openFileName)
         guard FileManager.default.fileExists(atPath: url.path) else {
-            status = "Could not find \(entry.docxFileName) in the notes folder."
+            status = "Could not find \(entry.openFileName) in the notes folder."
             refreshSavedMeetings()
             return
         }

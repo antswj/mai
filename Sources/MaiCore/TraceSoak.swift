@@ -15,10 +15,14 @@ public struct MaiTraceEvent: Codable, Sendable, Equatable {
     public let appName: String?
     public let bundleIdentifier: String?
     public let windowTitle: String?
+    // Which side spoke, so a replayed trace reproduces coach behavior faithfully.
+    // Defaulted and optional, so existing golden traces decode unchanged.
+    public let source: String?
 
     public init(kind: MaiTraceEventKind, offsetMs: Int, speaker: String?, language: String?,
                 text: String, subject: String? = nil, appName: String? = nil,
-                bundleIdentifier: String? = nil, windowTitle: String? = nil) {
+                bundleIdentifier: String? = nil, windowTitle: String? = nil,
+                source: String? = nil) {
         self.kind = kind
         self.offsetMs = offsetMs
         self.speaker = speaker
@@ -28,6 +32,7 @@ public struct MaiTraceEvent: Codable, Sendable, Equatable {
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
         self.windowTitle = windowTitle
+        self.source = source
     }
 }
 
@@ -47,7 +52,8 @@ public struct MaiTrace: Codable, Sendable, Equatable {
         switch event.kind {
         case .transcript:
             return .transcript(TranscriptEvent(text: event.text, speaker: event.speaker,
-                                               timestamp: timestamp, isFinal: true, language: event.language))
+                                               timestamp: timestamp, isFinal: true, language: event.language,
+                                               source: event.source.flatMap { SpeakerSource(rawValue: $0) }))
         case .screen:
             return .screen(ScreenContentEvent(content: event.text, timestamp: timestamp,
                                               isChange: true, subject: event.subject,
@@ -202,7 +208,10 @@ public enum TraceAnonymizer {
         return MaiTraceEvent(kind: .transcript, offsetMs: offset,
                              speaker: anonymizedSpeaker(event.speaker),
                              language: event.language,
-                             text: sanitizedTranscript(event.text))
+                             text: sanitizedTranscript(event.text),
+                             // Which side spoke is not identifying, and dropping it would
+                             // make a replayed trace behave differently from the real run.
+                             source: event.source?.rawValue)
     }
 
     public static func screen(_ event: ScreenContentEvent, sessionStartedAt: Date) -> MaiTraceEvent {

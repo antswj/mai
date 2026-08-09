@@ -86,11 +86,32 @@ public struct StubLLM: LLMProvider {
         if low.contains("pause_ratio=0.00") && low.contains("energy_trend=0.00") {
             return object(["should_surface": false])
         }
+        // Answer in the language the input says was spoken, so the reply-language contract
+        // is exercised deterministically without a network call.
+        let spoken = valueAfter("Spoken language:", in: user) ?? "English"
+        let wantsReply = (valueAfter("Suggested reply requested:", in: user) ?? "no").hasPrefix("yes")
+        var reply = ""
+        var replyTranslation = ""
+        if wantsReply {
+            switch spoken {
+            case "Japanese":
+                reply = "その点について、もう少し詳しく教えていただけますか。"
+                replyTranslation = "Could you tell me a little more about that point?"
+            case "Chinese":
+                reply = "关于这一点，能再多说一些吗？"
+                replyTranslation = "Could you say a bit more about that point?"
+            default:
+                reply = "Could you say a bit more about what is driving that?"
+                replyTranslation = "Could you say a bit more about what is driving that?"
+            }
+        }
         return object([
             "should_surface": true,
             "headline": "Adjust the pace",
             "info": "The vocal pattern suggests this is a good moment to slow down and check alignment before moving on.",
             "recommended_move": "Ask one clarifying question and pause for the answer.",
+            "suggested_reply": reply,
+            "reply_translation": replyTranslation,
             "framework": "Motivational Interviewing OARS + active listening",
             "tier": "medium",
             "score": 0.76,

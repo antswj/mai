@@ -14,7 +14,10 @@ public final class SimulatedEars: Ears, @unchecked Sendable {
 
     public func inject(_ event: TranscriptEvent) { cont.yield(event) }
     public func injectLine(_ text: String, speaker: String? = nil, at: Date = Date()) {
-        cont.yield(TranscriptEvent(text: text, speaker: speaker, timestamp: at, isFinal: true))
+        // Simulated lines stand in for the other party, so the coach treats them the
+        // same way it treats system audio.
+        cont.yield(TranscriptEvent(text: text, speaker: speaker, timestamp: at, isFinal: true,
+                                   source: .remote))
     }
     public func finish() { cont.finish() }
 }

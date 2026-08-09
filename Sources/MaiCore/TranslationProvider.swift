@@ -15,7 +15,7 @@ import Foundation
 //    only, so live partials stay in the original language until they finalize, which
 //    is the inherent difference from the inline Soniox path.
 //
-// A model-based provider (for example Claude Sonnet, if Soniox quality is judged
+// A model-based provider (a hosted model, if Soniox quality is judged
 // insufficient) implements this same protocol with `inlineOnTranscriptStream = false`
 // and a real `translate(line:from:)`, selected via config. It is NOT built here.
 public protocol TranslationProvider: Sendable {

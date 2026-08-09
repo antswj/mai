@@ -100,6 +100,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         openMain()
     }
 
+    // Quitting is a normal way a session ends for a menu bar agent, so the transcript is
+    // finalized here too. The write is synchronous and bounded, so it completes inside the
+    // terminate handler. noteTakingSaved is false on purpose: the note-taking pipeline is
+    // async and cannot finish during termination, so the plain transcript is the only thing
+    // that can still be preserved.
+    func applicationWillTerminate(_ notification: Notification) {
+        model.finalizeSession(reason: .quit, noteTakingSaved: false)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openMain()
         return true
@@ -148,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pauseMenuItem = addMenuItem("Pause Capture", to: menu, action: #selector(statusTogglePause))
         sessionMenuItem = addMenuItem("Stop Session", to: menu, action: #selector(statusToggleSession))
         addMenuItem("Start New Session", to: menu, action: #selector(statusStartNewSession))
+        addMenuItem("Save Session Transcript", to: menu, action: #selector(statusSaveTranscript))
         muteMenuItem = addMenuItem("Mute Microphone", to: menu, action: #selector(statusToggleMute))
         notesMenuItem = addMenuItem("Start Note-Taking", to: menu, action: #selector(statusToggleNoteTaking))
         menu.addItem(.separator())
@@ -220,6 +230,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func statusStartNewSession() {
         model.startNewSession()
+        updateStatusMenu()
+    }
+
+    // Stop Session is reachable from here, so a user can end a session without ever
+    // opening the window. The transcript save has to be reachable from here too.
+    @objc private func statusSaveTranscript() {
+        model.saveSessionTranscriptNow()
         updateStatusMenu()
     }
 

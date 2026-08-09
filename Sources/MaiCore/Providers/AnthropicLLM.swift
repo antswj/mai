@@ -2,8 +2,8 @@ import Foundation
 
 // Anthropic Messages API via raw HTTP (no official Swift SDK). Verified current
 // 2026-06: POST /v1/messages, x-api-key + anthropic-version: 2023-06-01, text in
-// content[].text. Default models claude-haiku-4-5 (classifier) / claude-sonnet-4-6
-// (drafter); claude-opus-4-8 is available for heavy reasoning.
+// content[].text. Default models are set in config.toml
+// ([models] classifier and drafter).
 public struct AnthropicLLM: LLMProvider {
     private let apiKey: String
     private let maxTokens: Int

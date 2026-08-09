@@ -242,16 +242,10 @@ public actor NotesStore {
     }
 
     private func updateIndex(folder: URL, export: MeetingExport) throws {
-        let indexURL = folder.appendingPathComponent("mai-meetings.json")
-        var entries = MeetingIndexEntry.load(from: indexURL)
-        entries.removeAll { $0.id == export.id }
-        entries.insert(MeetingIndexEntry(id: export.id, title: export.title, date: export.startedAt,
-                                         docxFileName: export.docxFileName, markdownFileName: export.markdownFileName),
-                       at: 0)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(entries).write(to: indexURL, options: .atomic)
+        try MeetingIndexEntry.upsert(
+            MeetingIndexEntry(id: export.id, title: export.title, date: export.startedAt,
+                              docxFileName: export.docxFileName, markdownFileName: export.markdownFileName),
+            in: folder)
     }
 
     // A filesystem-safe "YYYY-MM-DD Title" base name.
@@ -275,10 +269,41 @@ public struct MeetingIndexEntry: Sendable, Codable, Identifiable, Equatable {
     public let date: Date
     public let docxFileName: String
     public let markdownFileName: String
+    /// What produced this row. Nil means full meeting notes (every row written before
+    /// transcripts existed). Deliberately a plain String rather than an enum: `load`
+    /// returns an empty array on ANY decode error, so an unknown future value in an enum
+    /// would silently wipe the user's whole saved list. A String decodes anything and
+    /// degrades to "treat as full notes".
+    public let kind: String?
+
+    public static let kindTranscript = "transcript"
+    public var isTranscriptOnly: Bool { kind == Self.kindTranscript }
+    /// The file "Open" should open. A transcript-only row has just the one file.
+    public var openFileName: String { docxFileName.isEmpty ? markdownFileName : docxFileName }
+
+    public init(id: String, title: String, date: Date, docxFileName: String,
+                markdownFileName: String, kind: String? = nil) {
+        self.id = id; self.title = title; self.date = date
+        self.docxFileName = docxFileName; self.markdownFileName = markdownFileName
+        self.kind = kind
+    }
 
     public static func load(from url: URL) -> [MeetingIndexEntry] {
         guard let data = try? Data(contentsOf: url) else { return [] }
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
         return (try? dec.decode([MeetingIndexEntry].self, from: data)) ?? []
+    }
+
+    /// Insert or replace a row (newest first), keyed by id. Shared by the notes pipeline
+    /// and the session-transcript writer so there is one index format with one writer.
+    public static func upsert(_ entry: MeetingIndexEntry, in folder: URL) throws {
+        let indexURL = folder.appendingPathComponent("mai-meetings.json")
+        var entries = load(from: indexURL)
+        entries.removeAll { $0.id == entry.id }
+        entries.insert(entry, at: 0)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(entries).write(to: indexURL, options: .atomic)
     }
 }

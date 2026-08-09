@@ -10,11 +10,11 @@ import Testing
         let parsed = TOML.parse("""
         [models]
         screen = "gemini#experiment" # trailing comment
-        classifier = 'claude#haiku'
+        classifier = 'model#one'
         """)
 
         #expect(parsed["models"]?["screen"]?.string == "gemini#experiment")
-        #expect(parsed["models"]?["classifier"]?.string == "claude#haiku")
+        #expect(parsed["models"]?["classifier"]?.string == "model#one")
     }
 
     @Test func loadSessionRolloverSettings() throws {
