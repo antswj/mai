@@ -46,19 +46,19 @@ sentence you could actually say:
 
 ## Install
 
-**English.** Download **Mai.dmg** from the
+Download **Mai.dmg** from the
 [latest release](https://github.com/antswj/mai/releases/latest), open it, and drag Mai
 into your Applications folder. The first time you open it, right-click (or
 Control-click) the app and choose **Open**, then confirm. You only need to do that
 once; it is because the app is signed but not yet notarized by Apple. After that, open
 it normally.
 
-**日本語.** [最新リリース](https://github.com/antswj/mai/releases/latest)から **Mai.dmg**
+[最新リリース](https://github.com/antswj/mai/releases/latest)から **Mai.dmg**
 をダウンロードし、開いて Mai をアプリケーションフォルダにドラッグします。初回のみ、Mai を
 右クリック（または Control キーを押しながらクリック）して「開く」を選び、確認してください。
 これは Apple の公証がまだ済んでいないためで、次回からは通常どおり開けます。
 
-**中文.** 从[最新版本](https://github.com/antswj/mai/releases/latest)下载 **Mai.dmg**，
+从[最新版本](https://github.com/antswj/mai/releases/latest)下载 **Mai.dmg**，
 打开后把 Mai 拖进「应用程序」文件夹。首次打开时，请右键（或按住 Control 点按）Mai 并选择
 「打开」，然后确认。这是因为应用已签名但尚未通过 Apple 公证，之后就可以正常打开了。
 
@@ -84,14 +84,16 @@ Each one is free to create. Soniox is pay as you go, so put a little credit on i
 you will get no transcript. Anything you skip just turns off that feature; Mai still
 runs.
 
-**日本語.** Mai にはサーバーがありません。ご自身のアカウントを使うため、初回に API キーを
-入力します。入力したキーは macOS の Keychain に保存され、ファイルには残りません。文字起こし
-には Soniox が必須で、残高がないと文字起こしは行われません。他のキーは省略でき、その機能だけ
-がオフになります。
+Mai にはサーバーがありません。
+ご自身のアカウントを使うため、初回に API キーを入力します。
+入力したキーは macOS の Keychain に保存され、ファイルには残りません。
+文字起こしには Soniox が必須で、残高がないと文字起こしは行われません。
+他のキーは省略でき、その機能だけがオフになります。
 
-**中文.** Mai 没有服务器，使用的是你自己的账号，因此首次启动时需要填入 API 密钥。密钥保存在
-macOS 钥匙串中，不会写入文件。语音转写必须要有 Soniox 并保持余额，否则不会生成文字。其他密钥
-可以留空，只会关闭对应功能。
+Mai 没有服务器，使用的是你自己的账号，因此首次启动时需要填入 API 密钥。
+密钥保存在macOS 钥匙串中，不会写入文件。
+语音转写必须要有 Soniox 并保持余额，否则不会生成文字。
+其他密钥可以留空，只会关闭对应功能。
 
 ### 2. Give it permission to hear and see
 
@@ -124,12 +126,10 @@ From left to right:
 - **Eye** hides the panel. Mai keeps working; you just stop seeing it. Bring it back
   from the menu bar.
 
-**日本語.** ミッションモードのボタンは左から、翻訳の表示切り替え、マイクのミュート（自分の声
-だけ停止し、相手と画面はそのまま）、チャット、一時停止（取得・文字起こし・画面読み取り・保存
-をすべて停止）、パネルを隠す、の五つです。
+ミッションモードのボタンは左から、翻訳の表示切り替え、マイクのミュート（自分の声だけ停止し、相手と画面はそのまま）、
+チャット、一時停止（取得・文字起こし・画面読み取り・保存をすべて停止）、パネルを隠す、の五つです。
 
-**中文.** 任务模式顶部的五个按钮，从左到右依次是：切换翻译行、静音麦克风（只停用你自己的声音，
-对方与屏幕照常）、聊天、暂停（完全停止采集、转写、读屏与保存）、隐藏面板。
+任务模式顶部的五个按钮，从左到右依次是：切换翻译行、静音麦克风（只停用你自己的声音，对方与屏幕照常）、聊天、暂停（完全停止采集、转写、读屏与保存）、隐藏面板。
 
 ### 5. Where the panel goes
 
