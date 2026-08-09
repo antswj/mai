@@ -130,11 +130,22 @@ import Foundation
         let ears = SimulatedEars()
         let eyes = SimulatedEyes()
         let runTask = Task { await rig.engine.run(mergedStream(ears: ears, eyes: eyes)) }
-        eyes.inject("Slide 7: launch checklist")
         // The screen read must be ingested BEFORE the verbal cue, or there is nothing on
-        // screen to talk about. The two sources are separate tasks in the merged stream,
-        // so this wait is what orders them; 80ms was too tight on a loaded CI runner.
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        // screen to talk about and no card can ever appear. Ears and eyes arrive on
+        // independent tasks in the merged stream, so their order is not guaranteed. A
+        // fixed sleep here was only a guess at that ordering, and it was the flake: on a
+        // loaded runner the cue overtook the screen read and the test saw no card at all.
+        // Retrying the cue cannot rescue it either, because the classifier records its
+        // refire cooldown when it classifies, not when a card surfaces, so a repeat is
+        // silently suppressed. So wait for the read to actually land, then cue once.
+        eyes.inject("Slide 7: launch checklist")
+        var screenReady = false
+        for _ in 0..<300 {
+            if await rig.engine.currentScreen.contains("launch checklist") { screenReady = true; break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(screenReady, "the screen read reached the engine before the verbal cue")
+
         ears.injectLine("画面を見てください", speaker: "Sato")
         var got = false
         for _ in 0..<500 {

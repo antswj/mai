@@ -277,10 +277,18 @@ do {
     let ears = SimulatedEars()
     let eyes = SimulatedEyes()
     let runTask = Task { await rig.engine.run(mergedStream(ears: ears, eyes: eyes)) }
-    // Screen first (stored silently), then a verbal cue that points at it.
+    // Screen first (stored silently), then a verbal cue that points at it. Ears and eyes
+    // are independent tasks in the merged stream, so wait for the read to actually land
+    // rather than guessing with a sleep: if the cue overtakes it there is nothing on
+    // screen to talk about and no card can ever appear. Cueing again would not help,
+    // since the classifier records its refire cooldown at classify time.
     eyes.inject("Slide 7: launch checklist")
-    // Small gap so the two source streams forward in order before the cue.
-    try? await Task.sleep(nanoseconds: 80_000_000)
+    var screenReady = false
+    for _ in 0..<300 {
+        if await rig.engine.currentScreen.contains("launch checklist") { screenReady = true; break }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    check(screenReady, "the screen read reached the engine before the verbal cue")
     ears.injectLine("画面を見てください", speaker: "Sato")
     var got = false
     for _ in 0..<200 {

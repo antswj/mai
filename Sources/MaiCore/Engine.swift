@@ -75,6 +75,13 @@ public actor Engine {
 
     public var sessionId: String { session.id }
 
+    /// The most recent screen read the engine has ingested, or "" before the first one.
+    /// Read-only. A verbal screen cue can only produce a card once a screen read has
+    /// landed, and the ears and eyes arrive on independent tasks in the merged stream, so
+    /// this is what lets a caller (and the tests) observe that ordering instead of
+    /// guessing at it with a sleep.
+    public var currentScreen: String { currentScreenText }
+
     public init(
         config: Config,
         llm: LLMProvider,
