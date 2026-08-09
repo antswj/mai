@@ -9,7 +9,7 @@ in the language the other person is speaking.
 Everything runs on your own API keys. Nothing is sent anywhere except to the providers
 you configure, and personal details are stripped out before that happens.
 
-Mai は macOS 用の常時待機型アシスタントです。
+Mai は 会議や通話の内容をリアルタイムで支援するmacOSアプリです。
 会話をリアルタイムで文字起こしし、漢字にはふりがな、各行には翻訳が付きます。
 相手の言語のまま返せる一文を提案し、話題に関連する情報カードを静かに表示します。
 API キーはご自身のものを使い、送信前に個人情報は自動で伏せられます。
