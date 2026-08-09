@@ -9,9 +9,14 @@ in the language the other person is speaking.
 Everything runs on your own API keys. Nothing is sent anywhere except to the providers
 you configure, and personal details are stripped out before that happens.
 
-**日本語:** Mai は macOS 用の常時待機型アシスタントです。会話をリアルタイムで文字起こしし、漢字にはふりがな、各行には翻訳が付きます。相手の言語のまま返せる一文を提案し、話題に関連する情報カードを静かに表示します。API キーはご自身のものを使い、送信前に個人情報は自動で伏せられます。
+Mai は macOS 用の常時待機型アシスタントです。
+会話をリアルタイムで文字起こしし、漢字にはふりがな、各行には翻訳が付きます。
+相手の言語のまま返せる一文を提案し、話題に関連する情報カードを静かに表示します。
+API キーはご自身のものを使い、送信前に個人情報は自動で伏せられます。
 
-**中文:** Mai 是一款 macOS 常驻感知应用。它实时转写对话，为汉字标注拼音并逐行翻译，还能用对方所说的语言给出可直接说出口的回复建议，并安静地推送相关信息卡片。使用你自己的 API 密钥，发送前会自动隐去个人信息。
+Mai 是一款 macOS 常驻感知应用。
+它实时转写对话，为汉字标注拼音并逐行翻译，还能用对方所说的语言给出可直接说出口的回复建议，并安静地推送相关信息卡片。
+使用你自己的 API 密钥，发送前会自动隐去个人信息。
 
 ---
 
