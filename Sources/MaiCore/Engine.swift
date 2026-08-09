@@ -51,6 +51,9 @@ public actor Engine {
     // nil the engine keeps the step-1 Card/Face path unchanged (console + tests).
     private let richSink: RichCardSink?
     private let richEnricher: RichCardEnricher?
+    // Local redaction of personal information before anything is sent to a provider.
+    // Nil when the policy is off, so the feature costs nothing when disabled.
+    private let redactor: PIIRedactor?
     // While the assistant chat is open, info/fact cards pause but reply cards keep
     // running in the background, so a suggested reply is never missed.
     private var chatOpen = false
@@ -89,9 +92,22 @@ public actor Engine {
         self.config = config
         self.store = store
         self.verbatim = verbatim
-        self.face = face
         self.llm = llm
-        self.richSink = richSink
+        // Build the redactor first: the card sink is wrapped in a rehydrating decorator so
+        // BOTH the engine's emissions and the enricher's incremental re-emissions get real
+        // names back. One wrap, no per-call-site rehydration to forget.
+        let policy = config.piiPolicy
+        let redactor = policy.isActive ? PIIRedactor(policy: policy) : nil
+        self.redactor = redactor
+        // Both user-facing surfaces are wrapped, so a placeholder can never reach the user
+        // through the legacy card path either.
+        self.face = redactor.map { RehydratingFace(wrapping: face, redactor: $0) } ?? face
+        let outwardSink: RichCardSink? = {
+            guard let richSink else { return nil }
+            guard let redactor else { return richSink }
+            return RehydratingCardSink(wrapping: richSink, redactor: redactor)
+        }()
+        self.richSink = outwardSink
         self.context = RollingContext(maxTurns: config.maxTurns, maxSeconds: config.maxSeconds)
         self.classifier = Classifier(llm: llm, model: config.classifierModel,
                                      enabled: config.enabledTriggers,
@@ -105,12 +121,12 @@ public actor Engine {
                                meetingMode: config.meetingMode,
                                furigana: config.furigana, pinyin: config.pinyin)
         self.surfacing = Surfacing(threshold: config.threshold)
-        if let richSink, config.lookupEnabled {
+        if let outwardSink, config.lookupEnabled {
             self.richEnricher = RichCardEnricher(
                 config: config, llm: llm,
                 entity: entity ?? StubEntityLookup(),
                 grounded: grounded ?? StubGroundedSearch(),
-                places: places, location: location, sink: richSink)
+                places: places, location: location, sink: outwardSink)
         } else {
             self.richEnricher = nil
         }
@@ -141,13 +157,18 @@ public actor Engine {
 
     private func ingestTranscript(_ event: TranscriptEvent) async {
         let t0 = Date() // start of the user-perceived latency budget
-        context.append(event)
+        // Redact ONCE, here, before the line enters the rolling context. Every outbound
+        // prompt is built from that context, so this single call covers the classifier,
+        // the coach, the router, replies, and the assistant. The local store, the raw log,
+        // and the UI keep the real text: redaction is about what leaves the machine.
+        let outbound = redacted(event)
+        context.append(outbound)
         save(record(kind: "transcript", content: event.text, language: nil, speaker: event.speaker, at: event.timestamp))
         verbatim.appendTranscript(event, sessionId: session.id)
         // The coach gets the tagged window (who spoke, in what language, per line) so it is
         // not left inferring both from the script. The classifier's window below is the
         // untagged form and is unchanged.
-        maybeSurfaceCoaching(event: event, window: context.window(maxChars: 2_000, tagged: true), t0: t0)
+        maybeSurfaceCoaching(event: outbound, window: context.window(maxChars: 2_000, tagged: true), t0: t0)
 
         // Bound the classifier call so a hung LLM request can never freeze the
         // always-on loop (a freeze here would stop every card until it unblocked).
@@ -381,6 +402,20 @@ public actor Engine {
                 Task { await self.persistRich(final) }
             }
         }
+    }
+
+    /// The version of an utterance that is safe to send. Speaker names are redacted too:
+    /// a name on the call roster identifies a person exactly as the transcript does.
+    private func redacted(_ event: TranscriptEvent) -> TranscriptEvent {
+        guard let redactor else { return event }
+        // Register the speaker before redacting: whoever is talking is a known participant,
+        // so their name is matched exactly wherever it appears in later lines too.
+        redactor.registerKnownName(event.speaker)
+        return TranscriptEvent(text: redactor.redact(event.text),
+                               speaker: event.speaker.map { redactor.redact($0) },
+                               timestamp: event.timestamp, isFinal: event.isFinal,
+                               language: event.language, vocalSignal: event.vocalSignal,
+                               source: event.source)
     }
 
     private func preparedReplyRecent(at now: Date) -> Bool {

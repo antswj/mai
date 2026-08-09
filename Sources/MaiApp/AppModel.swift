@@ -132,6 +132,7 @@ final class AppModel: ObservableObject {
     private var traceReplayTask: Task<Void, Never>?
     private var sessionTranscriptTruncated = false
     private static let sessionTranscriptAutoSaveKey = "mai.sessionTranscriptAutoSave"
+    private static let redactBeforeSendKey = "mai.redactBeforeSend"
     private static let transcriptHintKey = "mai.transcriptSaveHintShown"
     private var lastRestartAt = Date.distantPast
     // Restarts spent trying to revive a dead microphone leg. Bounded, so a permission or
@@ -148,6 +149,14 @@ final class AppModel: ObservableObject {
         var config = Config.load()
         // The object(forKey:) probe is what lets config.toml set a non-default that the
         // user has never overridden in Settings.
+        let d = UserDefaults.standard
+        if d.object(forKey: Self.redactBeforeSendKey) != nil {
+            config.redactBeforeSend = d.bool(forKey: Self.redactBeforeSendKey)
+            config.redactPeople = d.object(forKey: "mai.redactPeople") as? Bool ?? config.redactPeople
+            config.redactContacts = d.object(forKey: "mai.redactContacts") as? Bool ?? config.redactContacts
+            config.redactIdentifiers = d.object(forKey: "mai.redactIdentifiers") as? Bool ?? config.redactIdentifiers
+            config.redactURLs = d.object(forKey: "mai.redactURLs") as? Bool ?? config.redactURLs
+        }
         if UserDefaults.standard.object(forKey: Self.sessionTranscriptAutoSaveKey) != nil {
             config.sessionTranscriptAutoSave = UserDefaults.standard.bool(forKey: Self.sessionTranscriptAutoSaveKey)
         }
@@ -179,7 +188,8 @@ final class AppModel: ObservableObject {
         let meter = UsageMeter(storeURL: URL(fileURLWithPath: dataDir + "/mai-usage.json"))
         self.usage = meter
         let baseLLM = MeteredLLM(MaiFactory.makeLLM(config: config, secrets: secrets), meter: meter)
-        self.notes = NotesStore(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
+        self.notes = NotesStore(llm: baseLLM, model: config.drafterModel,
+                                interface: config.interfaceLanguage, policy: config.piiPolicy)
         self.assistant = AnthropicAssistant(llm: baseLLM, model: config.drafterModel, interface: config.interfaceLanguage)
         self.translation = TranslationFactory.make(engine: config.translationEngine, target: config.interfaceLanguage)
 
@@ -787,6 +797,20 @@ final class AppModel: ObservableObject {
     func updateAppearanceConfig(_ mutate: (inout Config) -> Void) {
         var c = config; mutate(&c); config = c
         UserDefaults.standard.set(c.liquidGlassAmount, forKey: Self.liquidGlassAmountKey)
+    }
+
+    // Privacy settings persist AND rebuild the session: the redactor is built once when
+    // the engine starts, so a policy change only takes effect on the next one.
+    func updatePrivacyConfig(_ mutate: (inout Config) -> Void) {
+        var c = config; mutate(&c); config = c
+        let d = UserDefaults.standard
+        d.set(c.redactBeforeSend, forKey: Self.redactBeforeSendKey)
+        d.set(c.redactPeople, forKey: "mai.redactPeople")
+        d.set(c.redactContacts, forKey: "mai.redactContacts")
+        d.set(c.redactIdentifiers, forKey: "mai.redactIdentifiers")
+        d.set(c.redactURLs, forKey: "mai.redactURLs")
+        refreshDependentProviders()
+        rebuildSessionPreservingPause()
     }
 
     // Session settings persist and do NOT rebuild the engine or capture stack (unlike

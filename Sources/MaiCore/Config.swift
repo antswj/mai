@@ -52,6 +52,14 @@ public struct Config: Sendable {
     // act, and auto-rollover means a default-on setting would put files in the user's
     // folder from ordinary desk conversation with no action at all.
     public var sessionTranscriptAutoSave: Bool
+    // Local redaction of personal information before any text is sent to a provider.
+    // On by default: Mai transcribes real conversations, and the cost is paid once per
+    // line on a background path, so there is no reason to make privacy the opt-in.
+    public var redactBeforeSend: Bool
+    public var redactPeople: Bool
+    public var redactContacts: Bool
+    public var redactIdentifiers: Bool
+    public var redactURLs: Bool
     public var showLiveTranscript: Bool
     public var ruby: Bool
     // Visual tuning for the Mission HUD and card surfaces. 0 is calmer/denser,
@@ -135,6 +143,11 @@ public struct Config: Sendable {
         sessionIdleRolloverSeconds: Double = 20 * 60,
         sessionMaxSeconds: Double = 4 * 60 * 60,
         sessionTranscriptAutoSave: Bool = false,
+        redactBeforeSend: Bool = true,
+        redactPeople: Bool = true,
+        redactContacts: Bool = true,
+        redactIdentifiers: Bool = true,
+        redactURLs: Bool = false,
         showLiveTranscript: Bool = true,
         ruby: Bool = true,
         liquidGlassAmount: Double = 0.72,
@@ -185,6 +198,11 @@ public struct Config: Sendable {
         self.sessionIdleRolloverSeconds = sessionIdleRolloverSeconds
         self.sessionMaxSeconds = sessionMaxSeconds
         self.sessionTranscriptAutoSave = sessionTranscriptAutoSave
+        self.redactBeforeSend = redactBeforeSend
+        self.redactPeople = redactPeople
+        self.redactContacts = redactContacts
+        self.redactIdentifiers = redactIdentifiers
+        self.redactURLs = redactURLs
         self.showLiveTranscript = showLiveTranscript; self.ruby = ruby
         self.liquidGlassAmount = Self.clamp01(liquidGlassAmount)
         self.lookupEnabled = lookupEnabled; self.lookupRouterModel = lookupRouterModel
@@ -204,6 +222,14 @@ public struct Config: Sendable {
         self.ambientSpeechRMSThreshold = ambientSpeechRMSThreshold
         self.echoSuppression = echoSuppression
         self.echoSystemActiveRMS = echoSystemActiveRMS
+    }
+
+    /// The redaction policy in force. The master switch collapses to `.off`, so every
+    /// call site stays identical whether the feature is on or off.
+    public var piiPolicy: PIIPolicy {
+        guard redactBeforeSend else { return .off }
+        return PIIPolicy(redactPeople: redactPeople, redactContacts: redactContacts,
+                         redactIdentifiers: redactIdentifiers, redactURLs: redactURLs)
     }
 
     public var ambientFocusActive: Bool {
@@ -277,6 +303,11 @@ public struct Config: Sendable {
         if let v = dbl("session", "idle_rollover_seconds") { c.sessionIdleRolloverSeconds = v }
         if let v = dbl("session", "max_seconds") { c.sessionMaxSeconds = v }
         if let v = bln("session", "save_transcript") { c.sessionTranscriptAutoSave = v }
+        if let v = bln("privacy", "redact_before_send") { c.redactBeforeSend = v }
+        if let v = bln("privacy", "redact_people") { c.redactPeople = v }
+        if let v = bln("privacy", "redact_contacts") { c.redactContacts = v }
+        if let v = bln("privacy", "redact_identifiers") { c.redactIdentifiers = v }
+        if let v = bln("privacy", "redact_urls") { c.redactURLs = v }
         if let v = bln("transcript", "show_live") { c.showLiveTranscript = v }
         if let v = bln("transcript", "ruby") { c.ruby = v }
         if let v = dbl("appearance", "liquid_glass") { c.liquidGlassAmount = Self.clamp01(v) }

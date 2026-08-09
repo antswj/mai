@@ -12,24 +12,54 @@ public actor NotesStore {
     private var llm: LLMProvider
     private var model: String
     private var interface: Language
+    // The notes pipeline sends the whole meeting transcript to the model, a separate
+    // outbound surface from the engine's rolling context, so it redacts on its own. Its
+    // placeholder numbering is independent of the engine's and does not need to match:
+    // each subsystem redacts what it sends and rehydrates what it produces.
+    private var redactor: PIIRedactor?
 
     private var active = false
     private var startedAt: Date?
     private var lines: [MeetingLine] = []
     private var noted: [String] = []
 
-    public init(llm: LLMProvider, model: String, interface: Language) {
+    public init(llm: LLMProvider, model: String, interface: Language, policy: PIIPolicy = .off) {
         self.llm = llm; self.model = model; self.interface = interface
+        self.redactor = policy.isActive ? PIIRedactor(policy: policy) : nil
     }
 
     public func isActive() -> Bool { active }
     public func lineCount() -> Int { lines.count }
     public func notedCount() -> Int { noted.count }
 
-    public func update(llm: LLMProvider, model: String, interface: Language) {
+    public func update(llm: LLMProvider, model: String, interface: Language, policy: PIIPolicy = .off) {
         self.llm = llm
         self.model = model
         self.interface = interface
+        self.redactor = policy.isActive ? PIIRedactor(policy: policy) : nil
+    }
+
+    /// The transcript as it may be SENT. The saved meeting keeps the real text.
+    private func outbound(_ lines: [MeetingLine]) -> [MeetingLine] {
+        guard let redactor else { return lines }
+        return lines.map {
+            MeetingLine(speaker: redactor.redact($0.speaker), isUser: $0.isUser,
+                        text: redactor.redact($0.text), timestamp: $0.timestamp, language: $0.language)
+        }
+    }
+
+    private func outbound(_ items: [String]) -> [String] {
+        guard let redactor else { return items }
+        return items.map { redactor.redact($0) }
+    }
+
+    private func restored(_ notes: MeetingNotes) -> MeetingNotes {
+        guard let redactor else { return notes }
+        return MeetingNotes(summary: redactor.rehydrate(notes.summary),
+                            sections: notes.sections.map {
+                                MeetingNotes.Section(heading: redactor.rehydrate($0.heading),
+                                                     bullets: $0.bullets.map { b in redactor.rehydrate(b) })
+                            })
     }
 
     public func start(now: Date) {
@@ -92,14 +122,22 @@ public actor NotesStore {
         let notedItems = noted + extraNoted.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !captured.isEmpty || !notedItems.isEmpty else { return StopResult(export: nil, saveError: nil) }
 
+        // Everything the model sees is redacted; everything saved to disk keeps the real
+        // text, because the saved meeting is the user's own local record.
+        let sendableLines = outbound(captured)
+        let sendableNoted = outbound(notedItems)
+
         onStage(.reviewing)
-        var notes = await writeUp(lines: captured, noted: notedItems)
+        var notes = await writeUp(lines: sendableLines, noted: sendableNoted)
 
         onStage(.verifying)
-        notes = await verify(notes: notes, lines: captured, noted: notedItems)
+        notes = await verify(notes: notes, lines: sendableLines, noted: sendableNoted)
 
         onStage(.titling)
-        let title = await makeTitle(notes: notes, lines: captured, now: now)
+        let rawTitle = await makeTitle(notes: notes, lines: sendableLines, now: now)
+
+        notes = restored(notes)
+        let title = redactor.map { $0.rehydrate(rawTitle) } ?? rawTitle
 
         onStage(.saving)
         let id = UUID().uuidString

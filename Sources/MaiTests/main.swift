@@ -1747,6 +1747,81 @@ do {
     check(lock.withLock { cleared } == [.user], "unmuting does not clear anything new")
 }
 
+section("PII redaction: what leaves the machine, and what comes back")
+do {
+    let policy = PIIPolicy()
+    // Structured detectors, the high-precision layer.
+    let contact = "Email me at sato.kenji@example.co.jp or call 090-1234-5678."
+    let spans = PIIDetector.spans(in: contact, policy: policy)
+    check(spans.contains { $0.kind == .email }, "an email address is found")
+    check(spans.contains { $0.kind == .phone }, "a phone number is found")
+
+    // Luhn, so an ordinary long number is not mistaken for a card.
+    check(PIIDetector.passesLuhn("4111 1111 1111 1111"), "a valid test card passes the checksum")
+    check(!PIIDetector.passesLuhn("1234 5678 9012 3456"), "an arbitrary 16-digit number does not")
+    let cardSpans = PIIDetector.spans(in: "Card 4111 1111 1111 1111 on file.", policy: policy)
+    check(cardSpans.contains { $0.kind == .creditCard }, "a checksum-valid card is redacted")
+    let idSpans = PIIDetector.spans(in: "My number is 1234 5678 9012.", policy: policy)
+    check(idSpans.contains { $0.kind == .governmentID }, "a 12-digit government id is redacted")
+
+    // Stable placeholders: the same person is the same token every time, so the model can
+    // still follow who said what. This is what makes redaction safe for reply quality.
+    let r = PIIRedactor(policy: policy)
+    let first = r.redact("Sato said the budget is tight.")
+    let second = r.redact("Sato will confirm tomorrow.")
+    check(!first.contains("Sato"), "the name does not leave the machine")
+    check(!second.contains("Sato"), "and not on the second line either")
+    let token = PIIRedactor.token(kind: .person, index: 1)
+    check(first.contains(token) && second.contains(token), "the same person keeps the same placeholder")
+
+    // Round trip: the user sees the real name again.
+    check(r.rehydrate(first) == "Sato said the budget is tight.", "rehydration restores the original exactly")
+    check(r.rehydrate("Ask \(token) about it.").contains("Sato"), "a model reply mentioning the placeholder is restored")
+
+    // Place and thing names must survive, or the entity and place cards lose their subject.
+    // The system tagger calls both of these people; the confidence floor is what saves them.
+    let neutral = "What time does the Shinkansen leave for Osaka?"
+    check(r.redact(neutral) == neutral, "place and thing names are not mistaken for people")
+
+    // The master switch really is off.
+    let off = PIIRedactor(policy: .off)
+    check(off.redact("Sato said hello") == "Sato said hello", "with the policy off nothing is changed")
+    check(PIIDetector.spans(in: contact, policy: .off).isEmpty, "and nothing is even scanned")
+
+    // Per-kind policy control.
+    let peopleOnly = PIIPolicy(redactPeople: true, redactContacts: false,
+                               redactIdentifiers: false, redactURLs: false)
+    let peopleSpans = PIIDetector.spans(in: contact, policy: peopleOnly)
+    check(!peopleSpans.contains { $0.kind == .phone }, "contacts are kept when that switch is off")
+
+    // Placeholder numbering stays readable past the alphabet.
+    check(PIIRedactor.letter(1) == "A" && PIIRedactor.letter(26) == "Z" && PIIRedactor.letter(27) == "AA",
+          "placeholder letters keep going past Z")
+
+    // Known participants are matched exactly, which is what actually protects the people
+    // in the room: the system tagger alone finds neither name in this sentence.
+    let known = PIIRedactor(policy: policy)
+    known.registerKnownName("Tanaka")
+    known.registerKnownName("Suzuki")
+    let bothOut = known.redact("Tanaka met Suzuki.")
+    check(!bothOut.contains("Tanaka") && !bothOut.contains("Suzuki"),
+          "both known participants are redacted even when the tagger misses them")
+    check(known.rehydrate(bothOut) == "Tanaka met Suzuki.", "and both come back exactly")
+
+    // Role labels are not identities.
+    let roles = PIIRedactor(policy: policy)
+    roles.registerKnownName("You")
+    roles.registerKnownName("Speaker 2")
+    check(roles.redact("You and Speaker 2 agreed.") == "You and Speaker 2 agreed.",
+          "role labels are not treated as names")
+
+    // Word boundaries in Latin script, so a short name cannot match inside a word.
+    let boundary = PIIRedactor(policy: policy)
+    boundary.registerKnownName("Ann")
+    check(boundary.redact("The announcement is ready.") == "The announcement is ready.",
+          "a name is not matched inside a longer word")
+}
+
 section("Coach prompt file: loads and keeps its contract")
 do {
     let prompt = Prompts.coach

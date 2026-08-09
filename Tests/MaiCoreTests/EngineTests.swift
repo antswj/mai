@@ -131,10 +131,13 @@ import Foundation
         let eyes = SimulatedEyes()
         let runTask = Task { await rig.engine.run(mergedStream(ears: ears, eyes: eyes)) }
         eyes.inject("Slide 7: launch checklist")
-        try? await Task.sleep(nanoseconds: 80_000_000)
+        // The screen read must be ingested BEFORE the verbal cue, or there is nothing on
+        // screen to talk about. The two sources are separate tasks in the merged stream,
+        // so this wait is what orders them; 80ms was too tight on a loaded CI runner.
+        try? await Task.sleep(nanoseconds: 500_000_000)
         ears.injectLine("画面を見てください", speaker: "Sato")
         var got = false
-        for _ in 0..<200 {
+        for _ in 0..<500 {
             if !rig.face.cards.isEmpty { got = true; break }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }

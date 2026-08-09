@@ -107,6 +107,20 @@ max_seconds = 14400                 # 4 hours
 # transcript, so they are never written twice. Also available in Settings, Sessions.
 save_transcript = false
 
+[privacy]
+# Local redaction before anything is sent to a provider. Mai finds names, contact details,
+# payment numbers, and government ids in each finalized line and replaces them with stable
+# placeholders ("Tanaka" is always "Person A" for the session), then puts the real values
+# back in everything you see. The mapping never leaves the machine and is never saved.
+# This runs once per line on a background path, so it adds nothing to response time.
+# It covers TEXT only: the audio sent for transcription and the screen images sent for
+# reading are the raw inputs themselves. Detection is good, not perfect.
+redact_before_send = true
+redact_people = true          # speaker names and names spoken aloud
+redact_contacts = true        # emails, phone numbers, postal addresses
+redact_identifiers = true     # payment card numbers (checksum-verified) and 12-digit ids
+redact_urls = false           # off by default: a link is usually the topic, not personal
+
 [coaching]
 # Live coaching has two layers: instant local cues and a slower AI vocal-analysis pass.
 # The AI pass does NOT upload raw audio; Mai extracts vocal features locally from the

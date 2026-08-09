@@ -95,6 +95,26 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Privacy") {
+                Toggle("Remove personal information before sending",
+                       isOn: Binding(get: { model.config.redactBeforeSend },
+                                     set: { v in model.updatePrivacyConfig { $0.redactBeforeSend = v } }))
+                Text("Names, contact details, and id numbers are replaced with stable placeholders before any text is sent, and put back in everything you see. The mapping stays on this Mac and is never saved. Audio and screen images are not covered.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Group {
+                    Toggle("People's names", isOn: Binding(get: { model.config.redactPeople },
+                                                           set: { v in model.updatePrivacyConfig { $0.redactPeople = v } }))
+                    Toggle("Emails, phone numbers, addresses", isOn: Binding(get: { model.config.redactContacts },
+                                                           set: { v in model.updatePrivacyConfig { $0.redactContacts = v } }))
+                    Toggle("Card and id numbers", isOn: Binding(get: { model.config.redactIdentifiers },
+                                                           set: { v in model.updatePrivacyConfig { $0.redactIdentifiers = v } }))
+                    Toggle("Web links", isOn: Binding(get: { model.config.redactURLs },
+                                                           set: { v in model.updatePrivacyConfig { $0.redactURLs = v } }))
+                }
+                .disabled(!model.config.redactBeforeSend)
+                .padding(.leading, 12)
+            }
+
             Section("Sessions") {
                 Toggle("Save transcript when a session ends",
                        isOn: Binding(get: { model.config.sessionTranscriptAutoSave },
